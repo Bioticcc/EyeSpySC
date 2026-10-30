@@ -12,8 +12,8 @@ fi
 
 cd "${project_root}/backend"
 "${project_root}/scripts/check-version-consistency.sh"
-"${venv_bin}/ruff" check .
-"${venv_bin}/ruff" format --check .
+"${venv_bin}/ruff" check . ../scripts/zheng_test
+"${venv_bin}/ruff" format --check . ../scripts/zheng_test
 "${venv_bin}/mypy" src
 "${venv_bin}/pytest"
 

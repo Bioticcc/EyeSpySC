@@ -72,14 +72,22 @@ input images.
 - **Algorithm tuning is blocked:** we are waiting for the supervisor's expert
   sperm counts. Do not tune thresholds from the provisional (non-expert)
   counts. See README "Validation status and open counting rules".
+- **Rerun the ZhengTest after re-tuning.** Once the expert counts arrive and
+  the algorithm is updated, run `scripts/zheng-test.sh` again (numpy
+  Zhang–Suen vs OpenCV-contrib thinning on the 12 review images). On
+  2026-10-30 counts were identical and one head moved; we kept the numpy
+  version. See `docs/Dev_Diary.md`.
 - **Current work is release prep.** Follow
-  `/home/kyle/Desktop/Adam/SOFTWARE_RELEASE_STANDARD.md`, **Appendix A**:
-  1. ~~package layout~~ and 2. ~~`check.sh` and CI~~ are done (CI green is
-  still to confirm after the first push). Next: 3. the PyInstaller sidecar
-  and its smoke test, then `v0.1.0-rc.1` as a CLI-only `.deb`; 4. the Tauri
-  GUI. Missus Tom (`/home/kyle/Desktop/Adam/MissusTom/`) is the reference
-  implementation. Copy its scripts and adapt them. Version and consistency
-  scripts cover only the backend until `desktop/` exists.
+  `/home/kyle/Desktop/Adam/SOFTWARE_RELEASE_STANDARD.md`, **Appendix A**.
+  Done: package layout; `check.sh` and CI (green on `a74a5d3`); PyInstaller
+  sidecar, smoke test, CLI-only `.deb`, release ZIP, and
+  `release-linux.yml` (verified locally). Next: a `workflow_dispatch` dry run
+  of the release workflow, then `v0.1.0-rc.1` (only when the user asks), then
+  the Tauri GUI. When `desktop/` is added, extend
+  `check-version-consistency.sh` and `update-release-version.sh` to the
+  desktop manifests, and keep the installed CLI command `/usr/bin/eyespysc`.
+  Missus Tom (`/home/kyle/Desktop/Adam/MissusTom/`) is the reference
+  implementation.
 
 ## Reference code (read-only)
 

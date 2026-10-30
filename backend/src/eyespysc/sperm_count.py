@@ -33,6 +33,9 @@ from .scp_helpers import (
     zhang_suen_thinning,
 )
 
+# Written by scripts/build-linux-sidecars.sh into packaged builds only.
+BUILD_REVISION_FILE = Path(__file__).resolve().parent / "build_revision.txt"
+
 IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 # Thresholds below were tuned on the 2048x1536 example image; lengths and areas
 # scale up for frames with a longer side than this reference.
@@ -768,11 +771,19 @@ def magnification_from_name(name: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def version_text() -> str:
+    """'eyespysc <version>', plus the source commit in packaged builds."""
+    text = f"eyespysc {__version__}"
+    if BUILD_REVISION_FILE.is_file():
+        text += f" (build {BUILD_REVISION_FILE.read_text(encoding='utf-8').strip()})"
+    return text
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="eyespysc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action="version", version=version_text())
     parser.add_argument(
         "--input",
         type=Path,

@@ -11,6 +11,30 @@ the current imaging setup.
 Like SCP, it is fully deterministic image processing. There is no model
 training and no learned image recognition.
 
+**Status: prerelease.** Counts are provisional. They have not yet been
+validated against expert counts (see
+[Validation status](#validation-status-and-open-counting-rules)).
+
+## Install
+
+Releases are on the GitHub releases page as one ZIP per version,
+`EyeSpySC_ver<version>_Linux-x86_64_Ubuntu-Debian.zip`. It holds the `.deb`,
+`SHA256SUMS`, and `installation.md`. Supported: Ubuntu 22.04+ and Debian 12+
+on x86_64, and Windows 10/11 through WSL2 Ubuntu. No Python is needed.
+
+```bash
+unzip EyeSpySC_ver<version>_Linux-x86_64_Ubuntu-Debian.zip
+sha256sum --check SHA256SUMS
+sudo apt install ./eyespysc_<version>_linux-x86_64.deb
+eyespysc --input /path/to/images --output-root /path/to/results
+```
+
+Uninstall with `sudo apt remove eyespysc`. On WSL, keep images under the
+Linux filesystem (`~/...`): it is much faster than `/mnt/c/...`.
+
+The installed `eyespysc` command takes the same options as described under
+[Run](#run).
+
 ## Input requirements
 
 | Requirement | Expected |
@@ -195,6 +219,20 @@ Each image also gets a folder, `<output-root>/<image-stem>/`, containing:
 
 CI runs the same script on every push.
 
+## Packaging and releases
+
+Releases are built only by GitHub Actions from an annotated tag; see
+[docs/RELEASING.md](docs/RELEASING.md). The build:
+
+1. installs hash-locked dependencies (`backend/requirements-build.lock`,
+   regenerated with `scripts/generate-python-build-lock.sh`);
+2. freezes the CLI with PyInstaller (`scripts/build-linux-sidecars.sh`);
+3. smoke-tests the binary on a synthetic image (`scripts/smoke-packaged-cli.sh`);
+4. wraps it in a CLI-only `.deb` (`scripts/build-linux-deb.sh`) and the
+   release ZIP (`scripts/create-linux-release-zip.sh`).
+
+Versions are changed only with `./scripts/update-release-version.sh vX.Y.Z`.
+
 The tests use synthetic phase-contrast-like images. They cover:
 
 - a single sperm and two separate sperm;
@@ -278,6 +316,12 @@ decide what the algorithm should count:
 | How should **sperm cut off by the border** be handled? That covers heads on the edge with little tail, and tails entering from the edge with no head | Heads with less than about 100 px of tail are missed. Edge tails without a head are not counted |
 | Should **very faint ("transparent") sperm** be included? | Often below the detection threshold |
 | Is there a **standard counting convention** for this preparation? | — |
+
+**Thinning implementation (ZhengTest).** On the same 12 images, OpenCV-contrib's
+`cv2.ximgproc.thinning` gave identical counts to the numpy Zhang–Suen used
+here, but one head moved to a different object (`docs/Dev_Diary.md`). The
+numpy version stays. `scripts/zheng-test.sh` repeats the comparison and must
+be rerun after the algorithm is re-tuned against the expert counts.
 
 ## Next steps
 

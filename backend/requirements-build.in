@@ -1,0 +1,12 @@
+# Input for the hash-checked release build environment. Regenerate with
+# scripts/generate-python-build-lock.sh; do not hand-edit requirements-build.lock.
+# Runtime pins must equal backend/pyproject.toml: validated counts depend on them.
+numpy==2.2.6
+opencv-python-headless==4.13.0.92
+Pillow==12.2.0
+pyinstaller==6.11.1
+# PyInstaller's pkg_resources runtime hook imports this on Python 3.11.
+backports.tarfile==1.2.0; python_version < '3.12'
+mypy==1.20.2
+pytest==8.4.2
+ruff==0.17.3

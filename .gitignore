@@ -37,3 +37,4 @@ __pycache__/
 build/
 dist/
 node_modules/
+build_revision.txt
