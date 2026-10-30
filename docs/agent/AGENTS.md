@@ -33,13 +33,20 @@ validation status. Read it before changing behavior.
   (the header records the source commit). Do not edit them without recording
   the change. mypy strict is relaxed for this module only, to keep it verbatim.
 - `backend/tests/test_sperm_count.py`: synthetic-image tests (no lab data).
+- `desktop/`: the Tauri 2 + React GUI. It runs the `eyespysc` CLI once per
+  job with `--json-progress` (and `--preview-only` for the slideshow) and
+  never counts by itself. `src-tauri/src/lib.rs` holds the native commands;
+  `src/App.tsx` the one workspace screen. `src/houseStyle.css` is a verbatim
+  copy from Missus Tom; edit `src/styles.css` instead.
 - `scripts/check.sh`: the single quality gate, run locally and by CI.
 
 ## Setup and checks
 
 ```bash
-make backend-install   # backend/.venv, Python 3.11
+make backend-install    # backend/.venv, Python 3.11
+make frontend-install   # desktop/node_modules
 ./scripts/check.sh
+make desktop-dev        # run the GUI from source
 ```
 
 Regression baseline: the full test-image batch below must give a `summary.csv`
@@ -60,6 +67,9 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
   `skeletonize()`. A test enforces this.
 - Every pixel setting is tuned for 20x. Other magnifications are experimental.
 - `--overwrite` deletes the output root. Use scratch or `outputs/` paths only.
+- The GUI never passes `--overwrite`: every run writes a new time-stamped
+  folder. The installed commands are `/usr/bin/eyespysc` (CLI, unchanged
+  since rc.1) and `/usr/bin/eyespysc-desktop` (GUI).
 
 ## Data
 
@@ -87,15 +97,33 @@ input images.
   version. See `docs/Dev_Diary.md`.
 - **Release prep.** Following
   `/home/kyle/Desktop/Adam/SOFTWARE_RELEASE_STANDARD.md`, **Appendix A**.
-  CLI-only releases `v0.1.0-rc.1` and `rc.2` are published by CI. Next: the
-  user runs the clean-machine install checks (fresh Ubuntu VM and WSL2
-  Ubuntu); record the results in `docs/Dev_Diary.md`.
-- **GUI: wait for the user's go-ahead** before designing or building the
-  Tauri GUI. When `desktop/` is added, extend
-  `check-version-consistency.sh` and `update-release-version.sh` to the
-  desktop manifests, and keep the installed CLI command `/usr/bin/eyespysc`.
-  Missus Tom (`/home/kyle/Desktop/Adam/MissusTom/`) is the reference
-  implementation.
+  CLI-only releases `v0.1.0-rc.1` and `rc.2` are published by CI. `rc.2`
+  passed the clean-machine install check on a fresh Ubuntu VM and WSL2
+  Ubuntu (2026-10-30). `v0.1.0-rc.3` adds the GUI. The user decided
+  (2026-10-30) that the GUI ships within 0.1.0, and that 0.1.0 is published
+  after they test rc.3 by hand.
+- **GUI: implemented in rc.3, designed with the user.** User requirements
+  (2026-10-30):
+  1. Missus Tom house style (standard section 3) with the logo in the sidebar
+     and on About (principle 7).
+  2. **Minimal clutter.** The user gives one image or a folder, and the app
+     reports the sperm count and statistics. That is the whole job.
+  3. **20x is fixed.** Show "20x objective" as read-only text. There is no
+     magnification control.
+  4. **Results are shown in the app and also saved to files** (the CLI's
+     outputs). One workspace screen does the whole job:
+     - Choosing an image or a folder opens the originals as a slideshow
+       (prev/next, arrow keys, thumbnails).
+     - Count sperm switches each image to its overlay as it finishes.
+     - A side panel then shows the stats for the current image and for the
+       whole batch (total, mean per image, ...).
+
+     More stats will be added later.
+  5. Non-sperm cell counting comes later, after the sperm counts are good.
+
+  Approved mock-up: https://claude.ai/artifact/7iQUUDxCBjqDtFWzQ81bnD. Ask
+  before adding screens or controls beyond these. Missus Tom
+  (`/home/kyle/Desktop/Adam/MissusTom/`) is the reference implementation.
 
 ## Reference code (read-only)
 

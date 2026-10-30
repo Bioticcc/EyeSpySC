@@ -17,36 +17,61 @@ jobs:
     permissions:
       contents: read
     env:
-      SIDECAR_TARGET: x86_64-unknown-linux-gnu
+      TAURI_TARGET: x86_64-unknown-linux-gnu
+      VITE_BUILD_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - name: Install packaging prerequisites
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Select pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+      - name: Install Linux Tauri and packaging prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes zip
+          sudo apt-get install --yes \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf \
+            zip
       - name: Create backend build environment
         run: |
           python3 -m venv backend/.venv
           backend/.venv/bin/python -m pip install --require-hashes -r backend/requirements-build.lock
           backend/.venv/bin/python -m pip install --no-deps -e ./backend
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
       - name: Run application checks
         run: ./scripts/check.sh
       - name: Build Linux sidecar
-        run: bash scripts/build-linux-sidecars.sh "${SIDECAR_TARGET}"
+        run: bash scripts/build-linux-sidecars.sh "${TAURI_TARGET}"
       - name: Smoke packaged CLI
         run: |
           bash scripts/smoke-packaged-cli.sh \
-            "backend/dist/sidecars/eyespysc-cli-${SIDECAR_TARGET}" \
+            "backend/dist/sidecars/eyespysc-cli-${TAURI_TARGET}" \
             "${GITHUB_SHA}"
-      - name: Build, verify, and collect release artifacts
+      - name: Build Tauri release bundle
+        working-directory: desktop
+        run: npm run tauri:release
+      - name: Verify package and collect release artifacts
         env:
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')
+          package_version=$(node -p "require('./desktop/package.json').version")
           if [[ "${REF_TYPE}" == "tag" ]]; then
             release_version="${RELEASE_TAG#v}"
             if [[ "${release_version}" != "${package_version}" ]]; then
@@ -57,18 +82,18 @@ jobs:
             release_version="${package_version}"
           fi
 
-          deb_directory="build/deb"
-          bash scripts/build-linux-deb.sh \
-            --version "${release_version}" \
-            --cli "backend/dist/sidecars/eyespysc-cli-${SIDECAR_TARGET}" \
-            --output-dir "${deb_directory}"
+          bundle_root="desktop/src-tauri/target/${TAURI_TARGET}/release/bundle"
           shopt -s nullglob
-          deb_candidates=("${deb_directory}/"*.deb)
+          deb_candidates=("${bundle_root}/deb/"*.deb)
           if (( ${#deb_candidates[@]} != 1 )); then
-            echo "Expected exactly one Debian package under ${deb_directory}; found ${#deb_candidates[@]}." >&2
+            echo "Expected exactly one Debian package under ${bundle_root}/deb; found ${#deb_candidates[@]}." >&2
             exit 1
           fi
           deb_source="${deb_candidates[0]}"
+          bash scripts/normalize-debian-release-version.sh \
+            --release-version "${release_version}" \
+            --deb "${deb_source}" \
+            --package eyespysc
 
           debian_version=$(dpkg-deb --field "${deb_source}" Version)
           # Keep this in lockstep with scripts/normalize-debian-release-version.sh.
@@ -90,18 +115,29 @@ jobs:
           fi
 
           # The package holds exactly these files and nothing else.
-          dpkg-deb --fsys-tarfile "${deb_source}" | tar --list --file=- | grep -v '/$' | sort >package-files.txt
+          dpkg-deb --fsys-tarfile "${deb_source}" | tar --list --file=- | grep -v '/$' | sed 's|^\./||' | sort >package-files.txt
           printf '%s\n' \
-            ./usr/bin/eyespysc \
-            ./usr/share/doc/eyespysc/README.md \
-            ./usr/share/doc/eyespysc/THIRD_PARTY_NOTICES.md \
-            ./usr/share/doc/eyespysc/copyright | sort >expected-files.txt
+            usr/bin/eyespysc \
+            usr/bin/eyespysc-desktop \
+            usr/share/applications/EyeSpySC.desktop \
+            usr/share/doc/eyespysc/README.md \
+            usr/share/doc/eyespysc/THIRD_PARTY_NOTICES.md \
+            usr/share/doc/eyespysc/copyright \
+            usr/share/icons/hicolor/128x128/apps/eyespysc-desktop.png \
+            usr/share/icons/hicolor/256x256@2/apps/eyespysc-desktop.png \
+            usr/share/icons/hicolor/32x32/apps/eyespysc-desktop.png | sort >expected-files.txt
           if ! diff -u expected-files.txt package-files.txt; then
             echo "Release Debian package contents differ from the expected list." >&2
             exit 1
           fi
 
-          # Smoke the binary exactly as packaged, including its build revision.
+          # The bundled web interface carries this commit as its build revision.
+          if ! grep -rqF "${GITHUB_SHA}" desktop/dist/assets; then
+            echo "The desktop build does not contain build revision ${GITHUB_SHA}." >&2
+            exit 1
+          fi
+
+          # Smoke the CLI exactly as packaged, including its build revision.
           extracted=$(mktemp -d)
           dpkg-deb --extract "${deb_source}" "${extracted}"
           bash scripts/smoke-packaged-cli.sh "${extracted}/usr/bin/eyespysc" "${GITHUB_SHA}"

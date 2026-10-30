@@ -26,14 +26,38 @@ on x86_64, and Windows 10/11 through WSL2 Ubuntu. No Python is needed.
 unzip EyeSpySC_ver<version>_Linux-x86_64_Ubuntu-Debian.zip
 sha256sum --check SHA256SUMS
 sudo apt install ./eyespysc_<version>_linux-x86_64.deb
-eyespysc --input /path/to/images --output-root /path/to/results
 ```
 
-Uninstall with `sudo apt remove eyespysc`. On WSL, keep images under the
-Linux filesystem (`~/...`): it is much faster than `/mnt/c/...`.
+The package installs two things:
 
-The installed `eyespysc` command takes the same options as described under
-[Run](#run).
+- the **EyeSpySC desktop app**: open "EyeSpySC" from the applications menu, or
+  run `eyespysc-desktop`;
+- the **`eyespysc` command**, which takes the options described under
+  [Run](#run).
+
+Uninstall with `sudo apt remove eyespysc`. On WSL, the app opens through
+WSLg. Keep images under the Linux filesystem (`~/...`): it is much faster than
+`/mnt/c/...`.
+
+## Desktop app
+
+1. **Choose folder…** or **Choose images…** (TIFF or PNG, 20x phase
+   contrast). The images open as a slideshow. Move through them with
+   Prev / Next, the arrow keys, or the thumbnails.
+2. **Count sperm.** Each image switches to its overlay as soon as it is
+   counted. The count shows on its thumbnail.
+3. The side panel shows the current image's count (single sperm, sperm in
+   overlap clusters, and headless tails, which are not counted), and the batch
+   totals: total sperm, mean and median per image, and range.
+
+Every run saves to a new folder, by default
+`~/EyeSpySC results/<folder name> <date time>/` ("Change…" picks another
+place). It contains `summary.csv` and, per image, `original.png`,
+`overlay.png`, and `candidate_pixels.png` (the CLI's `--minimal` output).
+Earlier results are never overwritten. The magnification is fixed at 20x.
+
+The app runs the bundled `eyespysc` command for the work. Its counts are the
+same as the command line's.
 
 ## Input requirements
 
@@ -144,11 +168,20 @@ an accept/reject `reason`, so threshold tuning can be done from data.
 
 ## Setup
 
-Requires Python 3.11+. From this folder:
+Requires Python 3.11+, and for the desktop app Node.js 22 and the Rust
+toolchain pinned in `rust-toolchain.toml` (plus the Tauri Linux packages:
+`libwebkit2gtk-4.1-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`). From
+this folder:
 
 ```bash
-make backend-install   # backend/.venv with the eyespysc package and dev tools
+make backend-install    # backend/.venv with the eyespysc package and dev tools
+make frontend-install   # desktop/node_modules
+make desktop-dev        # run the app from source (counts with backend/.venv)
 ```
+
+The GUI follows the house style (`SOFTWARE_RELEASE_STANDARD.md` section 3).
+`desktop/src/houseStyle.css` is copied verbatim from Missus Tom; EyeSpySC's own
+rules are in `desktop/src/styles.css`.
 
 `backend/pyproject.toml` pins the exact versions used for the validated counts
 (numpy 2.2.6, opencv-python-headless 4.13.0.92, Pillow 12.2.0). Use plain
@@ -167,8 +200,10 @@ backend/.venv/bin/eyespysc --input inputsTest/EXAMPLE_testis_0007_TRANS.tif \
 ```
 
 - `--input` (required) is an image file or a folder, searched recursively.
-  Subfolders named `outputs` are skipped. Output folders mirror the input
-  subfolders, because the same file name recurs across sessions.
+  Repeat it to count several files or folders together. Subfolders named
+  `outputs` are skipped. Output folders mirror the input subfolders, because
+  the same file name recurs across sessions. If two inputs would write to the
+  same output folder, the command stops before counting.
 - `--output-root` (required) is created for the results.
 - `--minimal` writes only `original.png` (the input as an unannotated 8-bit
   PNG, for comparison), `overlay.png`, and `candidate_pixels.png` per image,
@@ -193,6 +228,11 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root outputs/runFull \
 - `--overwrite` deletes and recreates the output root. Without it, the command
   refuses to touch an existing output folder.
 - `eyespysc --version` prints the version. `python -m eyespysc` also works.
+- `--json-progress` prints one JSON object per line (`start`, one `image` per
+  image with its summary row and output paths, `done`) instead of text. The
+  desktop app reads this.
+- `--preview-only` counts nothing. It writes an 8-bit `preview.png` (long side
+  at most 1600 px) per image, for the app's slideshow.
 
 ## Outputs
 
@@ -214,10 +254,11 @@ Each image also gets a folder, `<output-root>/<image-stem>/`, containing:
 ## Tests
 
 ```bash
-./scripts/check.sh   # version consistency, ruff, mypy --strict, pytest
+./scripts/check.sh   # version consistency, ruff, mypy --strict, pytest,
+                     # desktop lint, tests, typecheck, and build
 ```
 
-CI runs the same script on every push.
+CI runs the same script on every push, plus `cargo test` for the desktop shell.
 
 ## Packaging and releases
 
@@ -228,8 +269,11 @@ Releases are built only by GitHub Actions from an annotated tag; see
    regenerated with `scripts/generate-python-build-lock.sh`);
 2. freezes the CLI with PyInstaller (`scripts/build-linux-sidecars.sh`);
 3. smoke-tests the binary on a synthetic image (`scripts/smoke-packaged-cli.sh`);
-4. wraps it in a CLI-only `.deb` (`scripts/build-linux-deb.sh`) and the
-   release ZIP (`scripts/create-linux-release-zip.sh`).
+4. builds the Tauri desktop app with the CLI as its sidecar
+   (`npm run tauri:release`), producing one `.deb` with `/usr/bin/eyespysc`
+   and `/usr/bin/eyespysc-desktop`;
+5. checks the package contents and smoke-tests the packaged CLI again, then
+   writes the release ZIP (`scripts/create-linux-release-zip.sh`).
 
 Versions are changed only with `./scripts/update-release-version.sh vX.Y.Z`.
 
@@ -246,7 +290,8 @@ The tests use synthetic phase-contrast-like images. They cover:
   measurement;
 - output files, including RGB input, 16-bit input, and minimal mode;
 - magnification scaling, file-name parsing, and the 40x preset;
-- the command line, end to end (`--version`, batch run, overwrite refusal);
+- the command line, end to end (`--version`, batch run, overwrite refusal,
+  JSON progress, preview-only, several inputs and output collisions);
 - Zhang–Suen thinning even when OpenCV-contrib is present.
 
 ## Current results on the example image

@@ -91,7 +91,16 @@ if the ZIP is in ~/Downloads:
    sudo apt install ./${deb_name}
    \`\`\`
 
-3. Count sperm in an image or a folder of images:
+3. Open **EyeSpySC** from the applications menu, or run:
+
+   \`\`\`bash
+   eyespysc-desktop
+   \`\`\`
+
+   Choose a folder or images, look through them, then press **Count sperm**.
+   Results are saved under \`~/EyeSpySC results/\` and shown in the app.
+
+4. Or count from a terminal:
 
    \`\`\`bash
    eyespysc --input /path/to/images --output-root /path/to/results
@@ -99,9 +108,11 @@ if the ZIP is in ~/Downloads:
 
    The output folder must not exist yet (\`--overwrite\` replaces it).
    Results: \`summary.csv\` plus one folder of overlays per image. Run
-   \`eyespysc --help\` for all options. Settings are tuned for 20x
-   grayscale phase-contrast images only, and counts are provisional until
-   validated against expert counts.
+   \`eyespysc --help\` for all options.
+
+Settings are tuned for 20x grayscale phase-contrast images only, and counts
+are provisional until validated against expert counts. On WSL the app opens
+through WSLg.
 
 To uninstall: \`sudo apt remove eyespysc\`.
 EOF

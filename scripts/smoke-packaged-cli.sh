@@ -75,4 +75,22 @@ for name in ("original.png", "overlay.png", "candidate_pixels.png", "instances.j
     if not (out / "one_sperm" / name).is_file():
         raise SystemExit(f"Packaged CLI did not write {name}.")
 PY
+
+# The desktop app drives the CLI with --preview-only and --json-progress.
+(
+  cd "${temporary_root}"
+  HOME="${temporary_root}/home" "${cli}" --input in --output-root previews \
+    --preview-only --json-progress > previews.jsonl
+)
+python3 - "${temporary_root}/previews.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+if [event["event"] for event in events] != ["start", "image", "done"]:
+    raise SystemExit(f"Packaged CLI preview events were {events}.")
+if not Path(events[1]["preview"]).is_file():
+    raise SystemExit("Packaged CLI did not write the preview it reported.")
+PY
 echo "packaged CLI smoke test: ok (${version_output})"

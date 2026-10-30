@@ -41,3 +41,32 @@ into the folder first; fixed in `v0.1.0-rc.2`.
 Decisions: the developer's provisional counts are now committed
 (`validation/provisional_counts_2026-10-28.csv`), and EyeSpySC skips the
 standard's separate testing-environment folder.
+
+## 2026-10-30: v0.1.0-rc.2 clean-machine install check
+
+The developer installed `v0.1.0-rc.2` from the GitHub release ZIP, following
+its `installation.md`, on a fresh Ubuntu VM and on WSL2 Ubuntu. The terminal
+version worked correctly on both. This meets the standard's section 10 check
+for the CLI-only package. Per Appendix A step 6, the first stable release
+still waits for the expert counts and re-validation.
+
+## 2026-10-30: Desktop GUI (v0.1.0-rc.3)
+
+The user picked the Missus Tom style from four theme mock-ups, and that style
+is now the house style for all our GUIs (standard section 3). The user's logo
+is required in every app (standard principle 7); `Random/Logo.svg` is a
+transparent vector trace of `Logo.png`.
+
+Design decisions, all from the user:
+- One screen does the whole job. Choosing images opens them as a slideshow;
+  Count sperm switches each image to its overlay as it finishes; a side panel
+  shows per-image and batch stats.
+- 20x is fixed and shown as text, not a control. No crops, overwrite, or
+  output-mode options. Each run saves to a new time-stamped folder.
+- The GUI ships within 0.1.0 (not 0.2.0 as Appendix A planned).
+
+Implementation: the GUI drives the existing CLI as a one-shot sidecar. The
+CLI gained `--json-progress`, `--preview-only`, and a repeatable `--input`.
+Counting code is untouched; the 100-image regression batch still matches
+`outputs/runFull/summary.csv` exactly. The Tauri `.deb` replaces the
+`dpkg-deb` CLI-only package and keeps `/usr/bin/eyespysc`.

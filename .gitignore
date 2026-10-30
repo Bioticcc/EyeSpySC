@@ -17,6 +17,8 @@ validation/*
 __MACOSX/
 # Approved exception (2026-10-30): the non-expert counts are versioned.
 !validation/provisional_counts_2026-10-28.csv
+# App icons, rendered from the developer logo (not lab data).
+!desktop/src-tauri/icons/*.png
 
 # Python
 .venv/
@@ -41,3 +43,7 @@ build/
 dist/
 node_modules/
 build_revision.txt
+desktop/*.tsbuildinfo
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/

@@ -41,6 +41,9 @@ IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 # scale up for frames with a longer side than this reference.
 REFERENCE_LONG_SIDE = 2048.0
 REFERENCE_MAGNIFICATION = 20.0
+# --preview-only images are downscaled to this long side; the app shows them
+# in a window, not at full resolution.
+PREVIEW_LONG_SIDE = 1600
 
 SINGLE_COLOR = (0, 220, 90)
 CLUSTER_COLOR = (255, 140, 0)
@@ -788,7 +791,8 @@ def parse_args() -> argparse.Namespace:
         "--input",
         type=Path,
         required=True,
-        help="Image file, or folder searched recursively for images.",
+        action="append",
+        help="Image file, or folder searched recursively for images. Repeat for several.",
     )
     parser.add_argument(
         "--output-root", type=Path, required=True, help="Folder to create for the results."
@@ -814,7 +818,52 @@ def parse_args() -> argparse.Namespace:
         help="Use a '_<N>x_' token in a file name (e.g. caput_40x_0019) when present, "
         "otherwise --magnification.",
     )
+    parser.add_argument(
+        "--preview-only",
+        action="store_true",
+        help="Do not count. Write an 8-bit preview.png per image (for the desktop app).",
+    )
+    parser.add_argument(
+        "--json-progress",
+        action="store_true",
+        help="Print one JSON object per line (start, image, done) instead of text.",
+    )
     return parser.parse_args()
+
+
+def plan_outputs(inputs: list[Path], output_root: Path) -> list[tuple[Path, Path, str]]:
+    """(image, output folder, display name) for every image under the inputs."""
+    planned = []
+    owners: dict[Path, Path] = {}
+    for input_path in inputs:
+        input_root = input_path if input_path.is_dir() else input_path.parent
+        for image_path in collect_images(input_path):
+            relative = image_path.relative_to(input_root)
+            # Mirror input subfolders: the same file name recurs across sessions.
+            out_dir = output_root / relative.parent / image_path.stem
+            if out_dir in owners:
+                raise SystemExit(
+                    f"{owners[out_dir]} and {image_path} would both write to {out_dir}; "
+                    "count them separately."
+                )
+            owners[out_dir] = image_path
+            planned.append((image_path, out_dir, str(relative)))
+    return planned
+
+
+def write_preview(gray: NDArray[Any], path: Path) -> None:
+    height, width = gray.shape
+    scale = PREVIEW_LONG_SIDE / max(height, width)
+    if scale < 1:
+        size = (round(width * scale), round(height * scale))
+        gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(gray).save(path)
+
+
+def emit(event: dict[str, Any]) -> None:
+    # NumPy scalars in the summary are not JSON types; .item() converts them.
+    print(json.dumps(event, default=lambda value: value.item()), flush=True)
 
 
 def main() -> None:
@@ -824,30 +873,73 @@ def main() -> None:
         if not args.overwrite:
             raise SystemExit(f"{output_root} exists; pass --overwrite to replace it.")
         shutil.rmtree(output_root)
-    images = collect_images(args.input)
-    if not images:
-        raise SystemExit(f"No images found under {args.input}")
+    planned = plan_outputs(args.input, output_root)
+    if not planned:
+        raise SystemExit(f"No images found under {', '.join(str(p) for p in args.input)}")
 
-    input_root = args.input if args.input.is_dir() else args.input.parent
+    total = len(planned)
+    if args.json_progress:
+        emit({"event": "start", "total": total, "preview_only": args.preview_only})
     rows = []
-    for image_path in images:
+    for index, (image_path, out_dir, name) in enumerate(planned, start=1):
         gray = load_gray(image_path)
+        image_event: dict[str, Any] = {
+            "event": "image",
+            "index": index,
+            "total": total,
+            "name": name,
+            "image": str(image_path.resolve()),
+        }
+        if args.preview_only:
+            write_preview(gray, out_dir / "preview.png")
+            if args.json_progress:
+                height, width = gray.shape
+                preview = str((out_dir / "preview.png").resolve())
+                emit({**image_event, "preview": preview, "width": width, "height": height})
+            else:
+                print(f"{name}: preview written")
+            continue
+
         magnification = args.magnification
         if args.magnification_from_filename:
             magnification = magnification_from_name(image_path.name) or magnification
         result = analyze_image(gray, settings_for_magnification(magnification))
-        # Mirror input subfolders: the same file name recurs across sessions.
-        out_dir = output_root / image_path.relative_to(input_root).parent / image_path.stem
         summary = write_outputs(image_path, gray, result, out_dir, minimal=args.minimal)
         rows.append(summary)
-        print(
-            f"{image_path.relative_to(input_root)}: {summary['sperm_count']} sperm "
-            f"({summary['single_instances']} single, "
-            f"{summary['overlap_clusters']} overlap clusters, "
-            f"{summary['headless_tail_segments']} headless tail segments)"
-        )
+        if args.json_progress:
+            folder = out_dir.resolve()
+            emit(
+                {
+                    **image_event,
+                    "output_dir": str(folder),
+                    "original": str(folder / "original.png"),
+                    "overlay": str(folder / "overlay.png"),
+                    "summary": summary,
+                }
+            )
+        else:
+            print(
+                f"{name}: {summary['sperm_count']} sperm "
+                f"({summary['single_instances']} single, "
+                f"{summary['overlap_clusters']} overlap clusters, "
+                f"{summary['headless_tail_segments']} headless tail segments)"
+            )
 
-    with (output_root / "summary.csv").open("w", newline="") as handle:
+    if args.preview_only:
+        if args.json_progress:
+            emit({"event": "done", "total": total})
+        return
+    summary_csv = output_root / "summary.csv"
+    with summary_csv.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+    if args.json_progress:
+        emit(
+            {
+                "event": "done",
+                "total": total,
+                "output_root": str(output_root.resolve()),
+                "summary_csv": str(summary_csv.resolve()),
+            }
+        )

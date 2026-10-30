@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EyeSpySC",
+  "version": "0.1.0-rc.3",
+  "identifier": "org.yanlab.eyespysc",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "EyeSpySC",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 620,
+        "zoomHotkeysEnabled": true,
+        "decorations": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb"],
+    "category": "Medical",
+    "shortDescription": "Sperm counting for 20x phase-contrast images",
+    "longDescription": "Counts sperm in low-contrast grayscale 20x phase-contrast microscope images with deterministic image processing. Includes the eyespysc command-line tool.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ],
+    "linux": {
+      "deb": {
+        "section": "science",
+        "files": {
+          "/usr/share/doc/eyespysc/copyright": "../../LICENSE",
+          "/usr/share/doc/eyespysc/README.md": "../../README.md",
+          "/usr/share/doc/eyespysc/THIRD_PARTY_NOTICES.md": "../../THIRD_PARTY_NOTICES.md"
+        }
+      }
+    }
+  }
+}

@@ -49,3 +49,10 @@ cd "${backend_root}"
   --distpath "${backend_root}/dist/sidecars" \
   --workpath "${backend_root}/build/pyinstaller" \
   "${backend_root}/packaging/eyespysc_sidecars.spec"
+
+# Tauri's externalBin expects <name>-<target>; the deb installs it as
+# /usr/bin/eyespysc, the same command the CLI-only releases shipped.
+desktop_binaries="${repository_root}/desktop/src-tauri/binaries"
+mkdir -p "${desktop_binaries}"
+install -m 0755 "${backend_root}/dist/sidecars/eyespysc-cli-${target}" \
+  "${desktop_binaries}/eyespysc-${target}"

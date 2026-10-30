@@ -20,10 +20,45 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - name: Create backend build environment
         run: |
           python3 -m venv backend/.venv
           backend/.venv/bin/python -m pip install --upgrade pip
           backend/.venv/bin/python -m pip install -e './backend[dev,packaging]'
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
       - name: Run application checks
         run: ./scripts/check.sh
+
+  desktop-shell:
+    name: Desktop shell (Rust)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Select pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+      - name: Install Linux Tauri prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+      - name: Build frontend (embedded by the Rust build)
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+      - name: Test desktop shell
+        working-directory: desktop/src-tauri
+        run: cargo test --locked

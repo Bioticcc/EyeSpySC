@@ -37,7 +37,37 @@ replace_once(
     r'^(__version__\s*=\s*)"[^"]+"$',
     rf'\g<1>"{version}"',
 )
+replace_once(
+    root / "desktop/src/appVersion.ts",
+    r'^(export const APP_VERSION\s*=\s*)"[^"]+";$',
+    rf'\g<1>"{version}";',
+)
+replace_once(
+    root / "desktop/src-tauri/Cargo.toml",
+    r'^(version\s*=\s*)"[^"]+"$',
+    rf'\g<1>"{version}"',
+)
+replace_once(
+    root / "desktop/src-tauri/Cargo.lock",
+    r'^(name = "eyespysc-desktop"\nversion = )"[^"]+"$',
+    rf'\g<1>"{version}"',
+)
+replace_once(
+    root / "desktop/package.json",
+    r'^(  "version"\s*:\s*)"[^"]+",$',
+    rf'\g<1>"{version}",',
+)
+replace_once(
+    root / "desktop/src-tauri/tauri.conf.json",
+    r'^(  "version"\s*:\s*)"[^"]+",$',
+    rf'\g<1>"{version}",',
+)
 PY
+
+(
+  cd "${repository_root}/desktop"
+  npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+)
 
 "${repository_root}/scripts/check-version-consistency.sh"
 printf 'Updated release metadata for %s.\n' "${release_tag}"

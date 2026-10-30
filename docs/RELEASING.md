@@ -15,10 +15,12 @@ git remote -v && gh auth status && ssh -T git@github.com
 backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
   --minimal --magnification-from-filename
 
-# Optional local packaging dry run (needs backend[packaging]; Python 3.11)
+# Optional local packaging dry run (needs backend[packaging], Node 22, Rust 1.98)
 scripts/build-linux-sidecars.sh
 scripts/smoke-packaged-cli.sh backend/dist/sidecars/eyespysc-cli-x86_64-unknown-linux-gnu \
   "$(git rev-parse HEAD)"
+(cd desktop && npm run tauri:release)   # deb under desktop/src-tauri/target/.../bundle/deb
+# Manual GUI check: choose a folder, browse, Count sperm, browse overlays
 # Or run the release build job on GitHub without publishing:
 gh workflow run release-linux.yml --ref main
 

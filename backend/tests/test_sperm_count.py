@@ -294,6 +294,75 @@ class CommandLineTests(unittest.TestCase):
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("--overwrite", again.stderr)
 
+    def write_one_sperm(self, path, seed=13):
+        img, rng = blank(seed)
+        draw_sperm(img, (150, 200), 20)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(path), finish(img, rng))
+
+    def test_json_progress_reports_each_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "in"
+            self.write_one_sperm(inputs / "a.png")
+            self.write_one_sperm(inputs / "b.png", seed=14)
+            out = Path(tmp) / "out"
+            done = self.run_cli(
+                "--input", str(inputs), "--output-root", str(out), "--minimal", "--json-progress"
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            events = [json.loads(line) for line in done.stdout.splitlines()]
+            self.assertEqual([e["event"] for e in events], ["start", "image", "image", "done"])
+            self.assertEqual(events[0]["total"], 2)
+            first = events[1]
+            self.assertEqual((first["index"], first["name"]), (1, "a.png"))
+            self.assertEqual(first["summary"]["sperm_count"], 1)
+            self.assertTrue(Path(first["overlay"]).is_file())
+            self.assertTrue(Path(first["original"]).is_file())
+            self.assertEqual(Path(events[-1]["summary_csv"]), (out / "summary.csv").resolve())
+
+    def test_preview_only_writes_previews_and_no_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in" / "big.png"
+            src.parent.mkdir()
+            cv2.imwrite(str(src), np.full((1800, 2400), 120, np.uint8))
+            out = Path(tmp) / "previews"
+            done = self.run_cli(
+                "--input", str(src), "--output-root", str(out), "--preview-only", "--json-progress"
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            events = [json.loads(line) for line in done.stdout.splitlines()]
+            self.assertEqual([e["event"] for e in events], ["start", "image", "done"])
+            image = events[1]
+            self.assertEqual((image["width"], image["height"]), (2400, 1800))
+            preview = cv2.imread(image["preview"], cv2.IMREAD_UNCHANGED)
+            self.assertEqual(preview.shape, (1200, sc.PREVIEW_LONG_SIDE))
+            self.assertFalse((out / "summary.csv").exists())
+            self.assertEqual([p.name for p in (out / "big").iterdir()], ["preview.png"])
+
+    def test_several_inputs_and_output_collisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "one" / "x.png"
+            second = Path(tmp) / "two" / "y.png"
+            self.write_one_sperm(first)
+            self.write_one_sperm(second, seed=14)
+            out = Path(tmp) / "out"
+            done = self.run_cli(
+                "--input", str(first), "--input", str(second), "--output-root", str(out)
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            with (out / "summary.csv").open(newline="") as handle:
+                self.assertEqual(len(list(csv.DictReader(handle))), 2)
+            self.assertTrue((out / "x" / "overlay.png").exists())
+            self.assertTrue((out / "y" / "overlay.png").exists())
+
+            clash = Path(tmp) / "three" / "x.png"
+            self.write_one_sperm(clash)
+            done = self.run_cli(
+                "--input", str(first), "--input", str(clash), "--output-root", str(Path(tmp) / "o2")
+            )
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("would both write to", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

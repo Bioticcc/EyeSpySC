@@ -2,12 +2,13 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 --release-version SEMVER --deb PACKAGE.deb" >&2
+  echo "Usage: $0 --release-version SEMVER --deb PACKAGE.deb [--package NAME]" >&2
   exit 2
 }
 
 release_version=""
 deb_source=""
+package_name=""
 
 while (( $# > 0 )); do
   case "$1" in
@@ -19,6 +20,11 @@ while (( $# > 0 )); do
     --deb)
       (( $# >= 2 )) || usage
       deb_source="$2"
+      shift 2
+      ;;
+    --package)
+      (( $# >= 2 )) || usage
+      package_name="$2"
       shift 2
       ;;
     *)
@@ -53,12 +59,22 @@ trap 'rm -rf "${staging_directory}"' EXIT
 
 dpkg-deb --raw-extract "${deb_source}" "${staging_directory}/package"
 sed -i "s/^Version: .*/Version: ${debian_version}/" "${staging_directory}/package/DEBIAN/control"
+if [[ -n "${package_name}" ]]; then
+  # Tauri derives the package name from productName ("EyeSpySC" -> eye-spy-sc);
+  # releases keep the name the CLI-only packages used, so apt upgrades them.
+  sed -i "s/^Package: .*/Package: ${package_name}/" "${staging_directory}/package/DEBIAN/control"
+fi
 dpkg-deb --build --root-owner-group "${staging_directory}/package" "${rebuilt_deb}"
 install -m 0644 "${rebuilt_deb}" "${deb_source}"
 
 actual_version="$(dpkg-deb --field "${deb_source}" Version)"
 if [[ "${actual_version}" != "${debian_version}" ]]; then
   echo "Debian package Version is ${actual_version}, expected ${debian_version}." >&2
+  exit 1
+fi
+
+if [[ -n "${package_name}" && "$(dpkg-deb --field "${deb_source}" Package)" != "${package_name}" ]]; then
+  echo "Debian package name is not ${package_name}." >&2
   exit 1
 fi
 
