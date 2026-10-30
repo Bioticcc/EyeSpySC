@@ -1,7 +1,8 @@
-# Lab data never enters this repository: images, counts, and all outputs.
+# Lab data never enters this repository: images, counts, and all outputs
+# (one approved exception at the end of this block).
 inputsTest/
 outputs/
-validation/
+validation/*
 *.tif
 *.tiff
 *.TIF
@@ -14,6 +15,8 @@ validation/
 *.zip
 ._*
 __MACOSX/
+# Approved exception (2026-10-30): the non-expert counts are versioned.
+!validation/provisional_counts_2026-10-28.csv
 
 # Python
 .venv/

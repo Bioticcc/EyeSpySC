@@ -1,0 +1,13 @@
+session_folder,image,provisional_count,algorithm_count_2026-10-28,counter,notes
+!20231002_tesis_caput_cauda_sperm_after_purfusion,testis_0003_TRANS.tif,13,9,non-expert (provisional),A few very transparent sperm the algorithm missed
+!20231002_tesis_caput_cauda_sperm_after_purfusion,caput_0014_TRANS.tif,16,11,non-expert (provisional),Several heads on the edge with barely any tail; several headless tails
+!20231002_tesis_caput_cauda_sperm_after_purfusion,caput_0026_TRANS.tif,16,11,non-expert (provisional),Many headless tails
+!20231002_tesis_caput_cauda_sperm_after_purfusion,testis_0008_TRANS.tif,17,14,non-expert (provisional),Tails entering from edges with no head
+!20231215_testicular_caput_cauda_sperm,M3O4_0003_TRANS.png,8,8,non-expert (provisional),Lots of debris
+!20231215_testicular_caput_cauda_sperm,testis_0007_TRANS.png,11,10,non-expert (provisional),One counted sperm may be a dud
+!20231215_testicular_caput_cauda_sperm,caput_0016_TRANS.png,32,15,non-expert (provisional),Many sperm blue (headless) / ignored by algorithm
+!20231215_testicular_caput_cauda_sperm,caput_0018_TRANS.png,17,15,non-expert (provisional),Distinct tail at edge with head cut off (not counted)
+!20240819_sperm_purify_sclb,testis_0003_TRANS.png,10,4,non-expert (provisional),Could be more; very transparent sperm
+!20240819_sperm_purify_sclb,caput_0023_TRANS.png,13,8,non-expert (provisional),Headless tails not counted
+!20240819_sperm_purify_sclb,caput_0025_TRANS.png,13,10,non-expert (provisional),Several tailless heads (counted)
+!20240819_sperm_purify_sclb,caput_0027_TRANS.png,16,11,non-expert (provisional),"Tangled; many tailless heads, may have missed a few"

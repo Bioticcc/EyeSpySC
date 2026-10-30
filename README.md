@@ -290,8 +290,9 @@ clusters, and 1 headless tail segment. These results were checked visually.
 
 ## Validation status and open counting rules
 
-**Provisional (non-expert) counts** for 12 images are in
-`validation/provisional_counts_2026-10-28.csv`, together with the algorithm's
+**Provisional (non-expert) counts** for 12 images, made by the project's
+developer, are in `validation/provisional_counts_2026-10-28.csv` (the only
+lab-data file committed to this repository), together with the algorithm's
 count from the same date. On these images the algorithm undercounted every
 time and never overcounted. It found 126 sperm against 202 counted by hand
 (about 62%).
@@ -302,8 +303,8 @@ first.
 **Expert counts requested.** A blind bundle (original image files plus a count
 sheet with total count and notes per image, without any algorithm or
 provisional counts) was prepared
-for the supervisor in `outputs/supervisor_count_bundle_2026-10-28/` (plus a
-`.zip`). When it comes back, compare all three for the 12 images: algorithm,
+for the supervisor in `outputs/Kyle_review_bundle/` (plus
+`outputs/Kyle_review_bundle.zip`; local only). When it comes back, compare all three for the 12 images: algorithm,
 provisional, and expert.
 
 **TODO: ask the supervisor which objects count as a sperm.** The answers

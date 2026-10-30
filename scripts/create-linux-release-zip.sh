@@ -69,13 +69,23 @@ install -m 0644 "${deb_source}" "${staging_directory}/${deb_name}"
   cat >installation.md <<EOF
 # Install EyeSpySC on Ubuntu or Debian
 
-1. Verify the installer checksum:
+Run every command from the folder this file was unzipped into. For example,
+if the ZIP is in ~/Downloads:
+
+   \`\`\`bash
+   cd ~/Downloads
+   unzip EyeSpySC_ver${release_version}_Linux-x86_64_Ubuntu-Debian.zip -d EyeSpySC_ver${release_version}
+   cd EyeSpySC_ver${release_version}
+   \`\`\`
+
+1. Verify the installer checksum. It should print \`${deb_name}: OK\`:
 
    \`\`\`bash
    sha256sum --check SHA256SUMS
    \`\`\`
 
-2. Install the verified package:
+2. Install the verified package. Keep the leading \`./\`; without it apt
+   looks for the package online:
 
    \`\`\`bash
    sudo apt install ./${deb_name}
@@ -87,6 +97,7 @@ install -m 0644 "${deb_source}" "${staging_directory}/${deb_name}"
    eyespysc --input /path/to/images --output-root /path/to/results
    \`\`\`
 
+   The output folder must not exist yet (\`--overwrite\` replaces it).
    Results: \`summary.csv\` plus one folder of overlays per image. Run
    \`eyespysc --help\` for all options. Settings are tuned for 20x
    grayscale phase-contrast images only, and counts are provisional until

@@ -67,6 +67,14 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
 They stay local. Never commit images, CSVs, or ZIPs, and never modify the
 input images.
 
+- **One exception, approved by the user on 2026-10-30:**
+  `validation/provisional_counts_2026-10-28.csv` (the user's own non-expert
+  counts for the 12 review images) is committed. Commit expert counts only
+  if the user approves that too.
+- **No testing environment.** The user decided EyeSpySC skips the standard's
+  `EyeSpySC_Testing-Environment/` (section 11 and Appendix A). Lab data stays
+  in this folder, git-ignored.
+
 ## Status (2026-10-30)
 
 - **Algorithm tuning is blocked:** we are waiting for the supervisor's expert
@@ -77,13 +85,13 @@ input images.
   Zhang–Suen vs OpenCV-contrib thinning on the 12 review images). On
   2026-10-30 counts were identical and one head moved; we kept the numpy
   version. See `docs/Dev_Diary.md`.
-- **Current work is release prep.** Follow
+- **Release prep.** Following
   `/home/kyle/Desktop/Adam/SOFTWARE_RELEASE_STANDARD.md`, **Appendix A**.
-  Done: package layout; `check.sh` and CI (green on `a74a5d3`); PyInstaller
-  sidecar, smoke test, CLI-only `.deb`, release ZIP, and
-  `release-linux.yml` (verified locally). Next: a `workflow_dispatch` dry run
-  of the release workflow, then `v0.1.0-rc.1` (only when the user asks), then
-  the Tauri GUI. When `desktop/` is added, extend
+  CLI-only releases `v0.1.0-rc.1` and `rc.2` are published by CI. Next: the
+  user runs the clean-machine install checks (fresh Ubuntu VM and WSL2
+  Ubuntu); record the results in `docs/Dev_Diary.md`.
+- **GUI: wait for the user's go-ahead** before designing or building the
+  Tauri GUI. When `desktop/` is added, extend
   `check-version-consistency.sh` and `update-release-version.sh` to the
   desktop manifests, and keep the installed CLI command `/usr/bin/eyespysc`.
   Missus Tom (`/home/kyle/Desktop/Adam/MissusTom/`) is the reference

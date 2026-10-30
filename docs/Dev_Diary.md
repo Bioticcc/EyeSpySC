@@ -27,3 +27,17 @@ Zhang–Suen otherwise. EyeSpySC now always uses the numpy Zhang–Suen (commit
 the ZhengTest after the supervisor's expert counts arrive and the algorithm is
 re-tuned, because retuned thresholds may sit closer to the skeleton
 differences.
+
+## 2026-10-30: v0.1.0-rc.1 install test (development machine)
+
+Released `v0.1.0-rc.1` ("Testing Install", commit `a42f1f6`), the first
+CLI-only `.deb`. The ZIP downloaded from the GitHub release installed with
+`apt` on the development machine. `eyespysc` run on the 12 review-bundle
+images reproduced the counts from source (9, 11, 11, 14, 8, 10, 15, 15, 4,
+8, 10, 11). This is not the clean-machine check: the machine already had
+Python and OpenCV. Finding: `installation.md` did not say to unzip and `cd`
+into the folder first; fixed in `v0.1.0-rc.2`.
+
+Decisions: the developer's provisional counts are now committed
+(`validation/provisional_counts_2026-10-28.csv`), and EyeSpySC skips the
+standard's separate testing-environment folder.
