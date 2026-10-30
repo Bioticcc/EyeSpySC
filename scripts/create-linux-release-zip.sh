@@ -98,6 +98,8 @@ if the ZIP is in ~/Downloads:
    \`\`\`
 
    Choose a folder or images, look through them, then press **Count sperm**.
+   Accepted files: .tif, .tiff, .png, .jpg, .jpeg and .bmp, 8- or 16-bit
+   grayscale (color is converted to gray).
    Results are saved under \`~/EyeSpySC results/\` and shown in the app.
 
 4. Or count from a terminal:

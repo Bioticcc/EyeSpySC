@@ -41,9 +41,10 @@ IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 # scale up for frames with a longer side than this reference.
 REFERENCE_LONG_SIDE = 2048.0
 REFERENCE_MAGNIFICATION = 20.0
-# --preview-only images are downscaled to this long side; the app shows them
-# in a window, not at full resolution.
+# --preview-only images are downscaled to these long sides; the app shows them
+# in a window and a thumbnail strip, not at full resolution.
 PREVIEW_LONG_SIDE = 1600
+THUMB_LONG_SIDE = 240
 
 SINGLE_COLOR = (0, 220, 90)
 CLUSTER_COLOR = (255, 140, 0)
@@ -792,7 +793,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         action="append",
-        help="Image file, or folder searched recursively for images. Repeat for several.",
+        help="Image file, or folder searched recursively for images "
+        "(.tif .tiff .png .jpg .jpeg .bmp). Repeat for several.",
     )
     parser.add_argument(
         "--output-root", type=Path, required=True, help="Folder to create for the results."
@@ -821,7 +823,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preview-only",
         action="store_true",
-        help="Do not count. Write an 8-bit preview.png per image (for the desktop app).",
+        help="Do not count. Write an 8-bit preview.png and thumb.png per image "
+        "(for the desktop app).",
     )
     parser.add_argument(
         "--json-progress",
@@ -851,9 +854,9 @@ def plan_outputs(inputs: list[Path], output_root: Path) -> list[tuple[Path, Path
     return planned
 
 
-def write_preview(gray: NDArray[Any], path: Path) -> None:
+def write_preview(gray: NDArray[Any], path: Path, long_side: int = PREVIEW_LONG_SIDE) -> None:
     height, width = gray.shape
-    scale = PREVIEW_LONG_SIDE / max(height, width)
+    scale = long_side / max(height, width)
     if scale < 1:
         size = (round(width * scale), round(height * scale))
         gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
@@ -892,10 +895,19 @@ def main() -> None:
         }
         if args.preview_only:
             write_preview(gray, out_dir / "preview.png")
+            write_preview(gray, out_dir / "thumb.png", THUMB_LONG_SIDE)
             if args.json_progress:
                 height, width = gray.shape
-                preview = str((out_dir / "preview.png").resolve())
-                emit({**image_event, "preview": preview, "width": width, "height": height})
+                folder = out_dir.resolve()
+                emit(
+                    {
+                        **image_event,
+                        "preview": str(folder / "preview.png"),
+                        "thumb": str(folder / "thumb.png"),
+                        "width": width,
+                        "height": height,
+                    }
+                )
             else:
                 print(f"{name}: preview written")
             continue

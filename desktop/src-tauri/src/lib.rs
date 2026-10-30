@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
-use tauri::ipc::{Channel, Response};
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, RunEvent};
 
 /// The one CLI process that may run at a time (previews or a count).
@@ -135,8 +135,16 @@ fn input_args(inputs: &[String]) -> Result<Vec<String>, String> {
     Ok(args)
 }
 
-/// Write an 8-bit preview of every image into the app cache, replacing the
-/// previous selection's previews.
+/// Let the window load images (previews, overlays) from this folder only.
+fn allow_images_from(app: &AppHandle, folder: &Path) -> Result<(), String> {
+    app.asset_protocol_scope()
+        .allow_directory(folder, true)
+        .map_err(|error| format!("Could not allow images from {}: {error}", folder.display()))
+}
+
+/// Write an 8-bit preview and thumbnail of every image into the app cache,
+/// replacing the previous selection's previews. Each selection gets a new
+/// folder, so the window never shows a cached image from an earlier one.
 #[tauri::command]
 async fn preview_images(
     app: AppHandle,
@@ -144,19 +152,23 @@ async fn preview_images(
     on_event: Channel<Value>,
 ) -> Result<(), String> {
     let mut args = input_args(&inputs)?;
-    let previews = app
+    let cache = app
         .path()
         .app_cache_dir()
         .map_err(|error| format!("Could not find the cache folder: {error}"))?
         .join("previews");
-    if previews.exists() {
-        std::fs::remove_dir_all(&previews)
+    if cache.exists() {
+        std::fs::remove_dir_all(&cache)
             .map_err(|error| format!("Could not clear old previews: {error}"))?;
     }
-    if let Some(parent) = previews.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Could not create the cache folder: {error}"))?;
-    }
+    std::fs::create_dir_all(&cache)
+        .map_err(|error| format!("Could not create the cache folder: {error}"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let previews = cache.join(stamp.to_string());
+    allow_images_from(&app, &previews)?;
     args.extend([
         "--output-root".to_string(),
         previews.to_string_lossy().into_owned(),
@@ -191,6 +203,7 @@ async fn count_sperm(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
     }
+    allow_images_from(&app, &output)?;
     args.extend([
         "--output-root".to_string(),
         output_root,
@@ -203,23 +216,6 @@ async fn count_sperm(
     })
     .await
     .map_err(|error| format!("The count could not finish: {error}"))?
-}
-
-/// Return a PNG written by the CLI (preview, original or overlay) as raw bytes.
-#[tauri::command]
-async fn read_image(path: String) -> Result<Response, String> {
-    let file = PathBuf::from(&path);
-    let is_png = file
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"));
-    if !file.is_absolute() || !is_png {
-        return Err(format!("Only absolute PNG paths can be shown: {path}"));
-    }
-    tauri::async_runtime::spawn_blocking(move || std::fs::read(&file))
-        .await
-        .map_err(|error| error.to_string())?
-        .map(Response::new)
-        .map_err(|error| format!("Could not read {path}: {error}"))
 }
 
 // Copied from Missus Tom (desktop/src-tauri/src/lib.rs, v0.4.8): WSL-aware folder opener.
@@ -305,7 +301,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             preview_images,
             count_sperm,
-            read_image,
             open_directory
         ])
         .build(tauri::generate_context!())

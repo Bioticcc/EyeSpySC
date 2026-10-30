@@ -4,13 +4,13 @@ import logo from "./assets/logo.svg";
 import { TitleBar } from "./components/TitleBar";
 import { APP_VERSION, BUILD_REVISION, formatBuildLabel } from "./appVersion";
 import {
+  ACCEPTED_TYPES_TEXT,
   chooseFolder,
   chooseImages,
   countSperm,
   homeFolder,
   isDesktopShell,
-  loadImage,
-  loadThumbnail,
+  imageUrl,
   openDirectory,
   previewImages,
   type CliEvent,
@@ -43,7 +43,6 @@ type Item = {
   preview?: string;
   thumb?: string;
   overlay?: string;
-  overlayThumb?: string;
   summary?: ImageSummary;
 };
 
@@ -67,8 +66,6 @@ export default function App() {
   const [outputRoot, setOutputRoot] = useState("");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState("");
-  const [mainUrl, setMainUrl] = useState<string | null>(null);
-  const blobUrls = useRef<string[]>([]);
   const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => {
@@ -77,11 +74,6 @@ export default function App() {
       .then((home) => setResultsParent(`${home}/EyeSpySC results`))
       .catch(() => setResultsParent(""));
   }, []);
-
-  const keep = (url: string) => {
-    blobUrls.current.push(url);
-    return url;
-  };
 
   const updateItem = (index: number, change: Partial<Item>) => {
     setItems((previous) =>
@@ -92,8 +84,6 @@ export default function App() {
   const busy = phase === "loading" || phase === "counting";
 
   const begin = async (next: Selection) => {
-    blobUrls.current.forEach((url) => URL.revokeObjectURL(url));
-    blobUrls.current = [];
     setSelection(next);
     setItems([]);
     setCurrent(0);
@@ -108,18 +98,21 @@ export default function App() {
         if (event.event === "start") setProgress({ done: 0, total: event.total });
         if (event.event !== "image" || !event.preview) return;
         const index = event.index - 1;
-        const preview = event.preview;
+        const loadedItem = { name: event.name, image: event.image, preview: event.preview, thumb: event.thumb };
         loaded += 1;
         setItems((previous) => {
           const copy = [...previous];
-          copy[index] = { name: event.name, image: event.image, preview };
+          copy[index] = loadedItem;
           return copy;
         });
         setProgress({ done: event.index, total: event.total });
-        void loadThumbnail(preview)
-          .then((url) => updateItem(index, { thumb: keep(url) }))
-          .catch(() => undefined);
       });
+      if (loaded === 0) {
+        setError("EyeSpySC finished reading the images but received none. Please report this.");
+        setSelection(null);
+        setPhase("empty");
+        return;
+      }
       setPhase("ready");
     } catch (reason) {
       setError(message(reason));
@@ -171,13 +164,9 @@ export default function App() {
       await countSperm(selection.inputs, root, (event: CliEvent) => {
         if (event.event !== "image" || !event.summary || !event.overlay) return;
         const index = event.index - 1;
-        const overlay = event.overlay;
         counted += 1;
-        updateItem(index, { overlay, summary: event.summary });
+        updateItem(index, { overlay: event.overlay, summary: event.summary });
         setProgress({ done: event.index, total: event.total });
-        void loadThumbnail(overlay)
-          .then((url) => updateItem(index, { overlayThumb: keep(url) }))
-          .catch(() => undefined);
       });
       setPhase("done");
     } catch (reason) {
@@ -210,36 +199,21 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [view, items.length, current, go]);
 
+  // Keep the current thumbnail visible by scrolling the strip sideways only;
+  // scrollIntoView would also scroll the whole page.
   useEffect(() => {
-    thumbRefs.current[current]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const thumb = thumbRefs.current[current];
+    const strip = thumb?.parentElement;
+    if (!thumb || !strip) return;
+    const thumbBox = thumb.getBoundingClientRect();
+    const stripBox = strip.getBoundingClientRect();
+    if (thumbBox.left < stripBox.left) strip.scrollLeft -= stripBox.left - thumbBox.left;
+    else if (thumbBox.right > stripBox.right) strip.scrollLeft += thumbBox.right - stripBox.right;
   }, [current]);
 
   const item = items[current] as Item | undefined;
   const isCounted = Boolean(item?.summary);
   const mainPath = isCounted && showOverlay ? item?.overlay : item?.preview;
-
-  useEffect(() => {
-    if (!mainPath) {
-      setMainUrl(null);
-      return;
-    }
-    let live = true;
-    void loadImage(mainPath)
-      .then((url) => {
-        if (!live) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        setMainUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous);
-          return url;
-        });
-      })
-      .catch((reason) => live && setError(message(reason)));
-    return () => {
-      live = false;
-    };
-  }, [mainPath]);
 
   const stats = useMemo(
     () => batchStats(items.flatMap((entry) => (entry.summary ? [entry.summary.sperm_count] : []))),
@@ -349,8 +323,12 @@ export default function App() {
                   </svg>
                   <strong>Choose images to count</strong>
                   <p>
-                    One image or a whole folder (subfolders included). TIFF or PNG, grayscale
-                    phase contrast. You can look through them before counting.
+                    One image or a whole folder (subfolders included). You can look through
+                    them before counting.
+                  </p>
+                  <p className="accepted-types">
+                    Accepted files: {ACCEPTED_TYPES_TEXT}. 8- or 16-bit grayscale phase
+                    contrast; color images are converted to gray.
                   </p>
                   <div className="dropzone-actions">
                     <button className="button primary" type="button" onClick={() => void pickFolder()}>
@@ -386,8 +364,13 @@ export default function App() {
                       )}
                     </div>
                     <div className="viewer-frame">
-                      {mainUrl && item ? (
-                        <img src={mainUrl} alt={`${tag} of ${item.name}`} />
+                      {mainPath && item ? (
+                        <img
+                          key={mainPath}
+                          src={imageUrl(mainPath)}
+                          alt={`${tag} of ${item.name}`}
+                          onError={() => setError(`Could not show ${item.name}.`)}
+                        />
                       ) : (
                         <div className="viewer-placeholder">Loading image…</div>
                       )}
@@ -408,8 +391,8 @@ export default function App() {
                             title={entry.name}
                             onClick={() => setCurrent(index)}
                           >
-                            {entry.overlayThumb || entry.thumb ? (
-                              <img src={entry.overlayThumb ?? entry.thumb} alt="" />
+                            {entry.thumb ? (
+                              <img src={imageUrl(entry.thumb)} alt="" loading="lazy" />
                             ) : (
                               <span className="thumb-empty" />
                             )}

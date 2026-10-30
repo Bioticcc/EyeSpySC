@@ -70,3 +70,30 @@ CLI gained `--json-progress`, `--preview-only`, and a repeatable `--input`.
 Counting code is untouched; the 100-image regression batch still matches
 `outputs/runFull/summary.csv` exactly. The Tauri `.deb` replaces the
 `dpkg-deb` CLI-only package and keeps `/usr/bin/eyespysc`.
+
+## 2026-10-30: rc.3 GUI never showed images (fixed for rc.4)
+
+The user's manual test of rc.3 on WSL: the app opened, but after choosing
+images it stayed on "Loading…", with a broken-image icon where the image
+should be. Two causes:
+
+1. `@tauri-apps/api` 2.2 (copied from Missus Tom's pins) against the
+   `tauri` 2.11 crate. The crate tags channel messages with `index`, the old
+   JavaScript expects `id`, so every progress message was queued forever and
+   the app never heard of any image. Missus Tom has the same mismatch but uses
+   no channels. Fix: JavaScript packages now match the crates
+   (`@tauri-apps/api` 2.11.1, `cli` 2.11.5, `plugin-dialog` 2.7.3), crates are
+   pinned exactly, and `desktop/test/tauriVersions.test.ts` checks the pairing.
+2. Images were passed as bytes over IPC and turned into blob URLs, which
+   WebKitGTK did not display. Fix: the window loads PNGs through Tauri's asset
+   protocol, allowed only for the preview folder and each results folder.
+   `--preview-only` also writes `thumb.png`, so the app no longer resizes
+   images itself.
+
+Also: narrow windows (or scaled displays) put Count sperm above the images
+instead of below them, and choosing a thumbnail no longer scrolls the page.
+The accepted file types are listed on the start screen.
+
+Verified locally with a temporary, uncommitted auto-load build: four real
+images loaded, counted 15/20/11/21 (as in the regression baseline), and
+overlays and stats displayed.

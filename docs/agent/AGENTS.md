@@ -67,6 +67,10 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
   `skeletonize()`. A test enforces this.
 - Every pixel setting is tuned for 20x. Other magnifications are experimental.
 - `--overwrite` deletes the output root. Use scratch or `outputs/` paths only.
+- **Tauri versions must match.** `@tauri-apps/api`, `@tauri-apps/cli` and
+  `@tauri-apps/plugin-dialog` stay on the same major.minor as the pinned
+  `tauri` and `tauri-plugin-dialog` crates (a test enforces it). rc.3 broke on
+  a mismatch; see `docs/Dev_Diary.md`.
 - The GUI never passes `--overwrite`: every run writes a new time-stamped
   folder. The installed commands are `/usr/bin/eyespysc` (CLI, unchanged
   since rc.1) and `/usr/bin/eyespysc-desktop` (GUI).

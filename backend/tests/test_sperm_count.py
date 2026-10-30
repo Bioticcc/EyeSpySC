@@ -337,7 +337,11 @@ class CommandLineTests(unittest.TestCase):
             preview = cv2.imread(image["preview"], cv2.IMREAD_UNCHANGED)
             self.assertEqual(preview.shape, (1200, sc.PREVIEW_LONG_SIDE))
             self.assertFalse((out / "summary.csv").exists())
-            self.assertEqual([p.name for p in (out / "big").iterdir()], ["preview.png"])
+            thumb = cv2.imread(image["thumb"], cv2.IMREAD_UNCHANGED)
+            self.assertEqual(thumb.shape, (180, sc.THUMB_LONG_SIDE))
+            self.assertEqual(
+                sorted(p.name for p in (out / "big").iterdir()), ["preview.png", "thumb.png"]
+            )
 
     def test_several_inputs_and_output_collisions(self):
         with tempfile.TemporaryDirectory() as tmp:

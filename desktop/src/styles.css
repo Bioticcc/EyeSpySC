@@ -69,6 +69,11 @@
   color: var(--muted);
 }
 
+.dropzone p.accepted-types {
+  max-width: 52ch;
+  font-size: 0.85rem;
+}
+
 .dropzone-actions {
   display: flex;
   flex-wrap: wrap;
@@ -427,8 +432,20 @@
   font-size: 0.9rem;
 }
 
-@media (max-width: 1050px) {
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr) 240px;
+    gap: 0.9rem;
+  }
+}
+
+/* Narrow windows: one column, with Count sperm and the numbers above the images. */
+@media (max-width: 920px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .side-panel {
+    order: -1;
   }
 }

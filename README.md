@@ -41,8 +41,8 @@ WSLg. Keep images under the Linux filesystem (`~/...`): it is much faster than
 
 ## Desktop app
 
-1. **Choose folder…** or **Choose images…** (TIFF or PNG, 20x phase
-   contrast). The images open as a slideshow. Move through them with
+1. **Choose folder…** or **Choose images…** (20x phase contrast; file types
+   under [Input requirements](#input-requirements)). The images open as a slideshow. Move through them with
    Prev / Next, the arrow keys, or the thumbnails.
 2. **Count sperm.** Each image switches to its overlay as soon as it is
    counted. The count shows on its thumbnail.
@@ -65,7 +65,7 @@ same as the command line's.
 |---|---|
 | Magnification | **20x objective for all inputs.** Every pixel setting is tuned for 20x |
 | Imaging | Grayscale phase contrast (TRANS channel), as currently acquired by the lab |
-| Format | 8-bit or 16-bit TIFF/PNG (16-bit is scaled to 8-bit); RGB is converted to gray |
+| Format | `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, or `.bmp` (any letter case). 8-bit or 16-bit (16-bit is scaled to 8-bit); color is converted to gray. TIFF straight from the microscope is best: JPEG compression was never validated |
 | Frame size | About 2048×1536. Larger frames scale settings up |
 | Density | **Reasonable density.** Sperm are mostly separable, and occasional crossing or touching tails are fine |
 
@@ -232,7 +232,7 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root outputs/runFull \
   image with its summary row and output paths, `done`) instead of text. The
   desktop app reads this.
 - `--preview-only` counts nothing. It writes an 8-bit `preview.png` (long side
-  at most 1600 px) per image, for the app's slideshow.
+  at most 1600 px) and `thumb.png` (240 px) per image, for the app's slideshow.
 
 ## Outputs
 

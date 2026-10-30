@@ -1,4 +1,4 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -15,6 +15,7 @@ export type CliEvent =
       name: string;
       image: string;
       preview?: string;
+      thumb?: string;
       width?: number;
       height?: number;
       output_dir?: string;
@@ -24,7 +25,11 @@ export type CliEvent =
     }
   | { event: "done"; total: number; output_root?: string; summary_csv?: string };
 
+// Same list as IMAGE_EXTENSIONS in backend/src/eyespysc/sperm_count.py, which
+// matches extensions in any letter case.
 const IMAGE_EXTENSIONS = ["tif", "tiff", "png", "jpg", "jpeg", "bmp"];
+
+export const ACCEPTED_TYPES_TEXT = "TIFF (.tif, .tiff), PNG, JPEG (.jpg, .jpeg) and BMP";
 
 export function isDesktopShell() {
   return "__TAURI_INTERNALS__" in window;
@@ -78,30 +83,9 @@ export async function countSperm(
   await invoke("count_sperm", { inputs, outputRoot, onEvent: channel });
 }
 
-async function readPng(path: string): Promise<Blob> {
-  requireDesktop("Showing images");
-  const bytes = await invoke<ArrayBuffer>("read_image", { path });
-  return new Blob([bytes], { type: "image/png" });
-}
-
-/** A PNG written by the CLI, as a blob URL. The caller revokes it. */
-export async function loadImage(path: string): Promise<string> {
-  return URL.createObjectURL(await readPng(path));
-}
-
-/** A small thumbnail (blob URL) of a PNG written by the CLI. The caller revokes it. */
-export async function loadThumbnail(path: string, width = 220): Promise<string> {
-  // Scale on the canvas: WebKitGTK may ignore createImageBitmap's resize options.
-  const bitmap = await createImageBitmap(await readPng(path));
-  const scale = Math.min(1, width / bitmap.width);
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const small = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!small) throw new Error("Could not make a thumbnail.");
-  return URL.createObjectURL(small);
+/** URL the window can load a PNG from. Rust allows only the preview and results folders. */
+export function imageUrl(path: string): string {
+  return convertFileSrc(path);
 }
 
 export async function openDirectory(path: string): Promise<void> {
