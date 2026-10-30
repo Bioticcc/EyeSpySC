@@ -1,16 +1,18 @@
+import csv
 import json
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import cv2
 import numpy as np
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_DIR))
-
-import sperm_count as sc  # noqa: E402
+from eyespysc import __version__
+from eyespysc import sperm_count as sc
 
 BACKGROUND = 139
 SIZE = (700, 900)  # height, width
@@ -41,7 +43,9 @@ def finish(img, rng):
 
 def heads_near(result, xy, tol=20):
     return [
-        h for inst in result["instances"] for h in inst.heads_xy
+        h
+        for inst in result["instances"]
+        for h in inst.heads_xy
         if np.hypot(h[0] - xy[0], h[1] - xy[1]) <= tol
     ]
 
@@ -148,6 +152,20 @@ class HelperTests(unittest.TestCase):
         self.assertAlmostEqual(sc.path_length(path), 39 * np.sqrt(2), places=3)
         self.assertTrue(np.all(np.abs(np.diff(path, axis=0)).max(axis=1) == 1))
 
+    def test_contrib_thinning_is_never_used(self):
+        # Validated counts use Zhang-Suen; an OpenCV-contrib install must not
+        # switch the pipeline to cv2.ximgproc.thinning.
+        def contrib_thinning(*_args):
+            raise AssertionError("cv2.ximgproc.thinning was called")
+
+        img, rng = blank(12)
+        draw_sperm(img, (150, 200), 20)
+        gray = finish(img, rng)
+        with mock.patch.object(
+            cv2, "ximgproc", types.SimpleNamespace(thinning=contrib_thinning), create=True
+        ):
+            self.assertEqual(sc.analyze_image(gray)["sperm_count"], 1)
+
 
 class MagnificationTests(unittest.TestCase):
     def test_scale_follows_magnification_ratio(self):
@@ -199,8 +217,13 @@ class OutputTests(unittest.TestCase):
             result = sc.analyze_image(loaded)
             out_dir = Path(tmp) / "out"
             summary = sc.write_outputs(src, loaded, result, out_dir)
-            for name in ("overlay.png", "sperm_mask.png", "candidate_pixels.png",
-                         "instance_labels.png", "instances.json"):
+            for name in (
+                "overlay.png",
+                "sperm_mask.png",
+                "candidate_pixels.png",
+                "instance_labels.png",
+                "instances.json",
+            ):
                 self.assertTrue((out_dir / name).exists(), name)
             self.assertEqual(len(list((out_dir / "crops").glob("*.png"))), len(result["instances"]))
             data = json.loads((out_dir / "instances.json").read_text())
@@ -218,8 +241,10 @@ class OutputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "out"
             summary = sc.write_outputs(Path("x.png"), gray, result, out_dir, minimal=True)
-            self.assertEqual(sorted(p.name for p in out_dir.iterdir()),
-                             ["candidate_pixels.png", "original.png", "overlay.png"])
+            self.assertEqual(
+                sorted(p.name for p in out_dir.iterdir()),
+                ["candidate_pixels.png", "original.png", "overlay.png"],
+            )
             original = cv2.imread(str(out_dir / "original.png"), cv2.IMREAD_UNCHANGED)
             self.assertTrue(np.array_equal(original, gray))
             self.assertEqual(summary["sperm_count"], 1)
@@ -235,6 +260,39 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(loaded.dtype, np.uint8)
             self.assertTrue(np.array_equal(loaded, gray))
             self.assertEqual(sc.analyze_image(loaded)["sperm_count"], 1)
+
+
+class CommandLineTests(unittest.TestCase):
+    def run_cli(self, *args):
+        return subprocess.run(
+            [sys.executable, "-m", "eyespysc", *args], capture_output=True, text=True, check=False
+        )
+
+    def test_version(self):
+        done = self.run_cli("--version")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), f"eyespysc {__version__}")
+
+    def test_batch_writes_summary_and_mirrors_subfolders(self):
+        img, rng = blank(13)
+        draw_sperm(img, (150, 200), 20)
+        gray = finish(img, rng)
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "in"
+            (inputs / "session").mkdir(parents=True)
+            cv2.imwrite(str(inputs / "session" / "one_sperm.png"), gray)
+            out = Path(tmp) / "out"
+            done = self.run_cli("--input", str(inputs), "--output-root", str(out))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("one_sperm.png: 1 sperm", done.stdout)
+            with (out / "summary.csv").open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual([row["sperm_count"] for row in rows], ["1"])
+            self.assertTrue((out / "session" / "one_sperm" / "overlay.png").exists())
+
+            again = self.run_cli("--input", str(inputs), "--output-root", str(out))
+            self.assertNotEqual(again.returncode, 0)
+            self.assertIn("--overwrite", again.stderr)
 
 
 if __name__ == "__main__":

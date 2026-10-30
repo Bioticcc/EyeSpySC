@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """Deterministic sperm highlighting and counting for low-contrast grayscale images.
 
-This is the ColorMask-SpermCount-CellCount offshoot of SCP. It reuses SCP's
+EyeSpySC is an offshoot of Sperm Color Pixels (SCP). It reuses SCP's
 local-background darkness idea and skeleton helpers, but replaces the brown
 stain color gate (which needs RGB Ward images) with a multi-scale Hessian ridge
 filter that finds faint thin dark tails in grayscale phase-contrast images.
@@ -20,19 +19,19 @@ import re
 import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import cv2
 import numpy as np
+from numpy.typing import NDArray
 from PIL import Image, UnidentifiedImageError
 
-from scp_helpers import (
+from . import __version__
+from .scp_helpers import (
     prune_skeleton_endpoints,
     remove_small_components,
-    skeletonize_binary,
+    zhang_suen_thinning,
 )
-
-PROJECT_DIR = Path(__file__).resolve().parent
 
 IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
 # Thresholds below were tuned on the 2048x1536 example image; lengths and areas
@@ -118,6 +117,16 @@ class SpermInstance:
     head_candidates: list[HeadCandidate] = field(default_factory=list)
 
 
+def skeletonize(mask: NDArray[Any]) -> NDArray[Any]:
+    """Zhang-Suen thinning, always.
+
+    SCP's skeletonize_binary switches to cv2.ximgproc.thinning when
+    OpenCV-contrib is installed, which changes counts. Every validated count
+    used Zhang-Suen, so call it directly whatever OpenCV build is present.
+    """
+    return zhang_suen_thinning(mask)
+
+
 def scale_factor(width: int, height: int, magnification: float = REFERENCE_MAGNIFICATION) -> float:
     # Like SCP: only enlarge kernels for bigger frames. Smaller crops at the same
     # magnification keep the reference pixel sizes. Higher magnification makes
@@ -126,7 +135,7 @@ def scale_factor(width: int, height: int, magnification: float = REFERENCE_MAGNI
     return frame * magnification / REFERENCE_MAGNIFICATION
 
 
-def load_gray(path: Path) -> np.ndarray:
+def load_gray(path: Path) -> NDArray[Any]:
     try:
         with Image.open(path) as img:
             if img.mode.startswith("I;16") or img.mode == "I":
@@ -140,16 +149,16 @@ def load_gray(path: Path) -> np.ndarray:
         raise RuntimeError(f"Could not read image: {path}") from exc
 
 
-def flatten_background(gray: np.ndarray, sigma: float) -> tuple[np.ndarray, float]:
+def flatten_background(gray: NDArray[Any], sigma: float) -> tuple[NDArray[Any], float]:
     """Return local darkness (background minus image) and robust noise sigma."""
     image = gray.astype(np.float32)
     background = cv2.GaussianBlur(image, (0, 0), sigmaX=sigma, sigmaY=sigma)
-    flat = image - background
+    flat: NDArray[Any] = image - background
     noise = float(1.4826 * np.median(np.abs(flat - np.median(flat))))
     return -flat, max(noise, 1e-3)
 
 
-def ridge_response(gray: np.ndarray, sigmas: tuple[float, ...]) -> np.ndarray:
+def ridge_response(gray: NDArray[Any], sigmas: tuple[float, ...]) -> NDArray[Any]:
     """Multi-scale Hessian response for thin dark lines on a bright background."""
     image = gray.astype(np.float32)
     response = np.zeros_like(image)
@@ -167,16 +176,17 @@ def ridge_response(gray: np.ndarray, sigmas: tuple[float, ...]) -> np.ndarray:
     return response
 
 
-def hysteresis_mask(response: np.ndarray, low: float, high: float) -> np.ndarray:
+def hysteresis_mask(response: NDArray[Any], low: float, high: float) -> NDArray[Any]:
     weak = (response >= low).astype(np.uint8)
     n_labels, labels = cv2.connectedComponents(weak, connectivity=8)
     keep = np.zeros(n_labels, dtype=bool)
     keep[np.unique(labels[response >= high])] = True
     keep[0] = False
-    return keep[labels].astype(np.uint8) * 255
+    mask: NDArray[Any] = keep[labels].astype(np.uint8) * 255
+    return mask
 
 
-def fill_holes(mask: np.ndarray) -> np.ndarray:
+def fill_holes(mask: NDArray[Any]) -> NDArray[Any]:
     """Fill background regions not connected to the image border."""
     padded = np.pad((mask > 0).astype(np.uint8) * 255, 1)
     flood = padded.copy()
@@ -185,7 +195,7 @@ def fill_holes(mask: np.ndarray) -> np.ndarray:
     return cv2.bitwise_or(mask, holes)
 
 
-def build_masks(gray: np.ndarray, settings: Settings) -> dict[str, Any]:
+def build_masks(gray: NDArray[Any], settings: Settings) -> dict[str, Any]:
     height, width = gray.shape
     scale = scale_factor(width, height, settings.magnification)
     dark, noise = flatten_background(gray, settings.background_sigma * scale)
@@ -201,6 +211,7 @@ def build_masks(gray: np.ndarray, settings: Settings) -> dict[str, Any]:
     )
 
     smooth_dark = cv2.GaussianBlur(dark, (0, 0), sigmaX=1.0, sigmaY=1.0)
+    blob: NDArray[Any]
     if settings.relief_contrast:
         # Higher magnification shows relief contrast: heads are hollow outlines
         # with one dark and one bright edge. Take contrast of either sign and
@@ -227,7 +238,7 @@ def build_masks(gray: np.ndarray, settings: Settings) -> dict[str, Any]:
     }
 
 
-def _skeleton_neighbors(coords_yx: np.ndarray) -> list[list[int]]:
+def _skeleton_neighbors(coords_yx: NDArray[Any]) -> list[list[int]]:
     coord_to_idx = {(int(y), int(x)): idx for idx, (y, x) in enumerate(coords_yx)}
     neighbors: list[list[int]] = [[] for _ in range(len(coords_yx))]
     for idx, (y, x) in enumerate(coords_yx):
@@ -240,7 +251,7 @@ def _skeleton_neighbors(coords_yx: np.ndarray) -> list[list[int]]:
     return neighbors
 
 
-def longest_skeleton_path(skeleton: np.ndarray) -> np.ndarray:
+def longest_skeleton_path(skeleton: NDArray[Any]) -> NDArray[Any]:
     """Ordered (N, 2) yx coordinates of the longest geodesic skeleton path.
 
     Same double-sweep idea as SCP's skeleton_longest_path, but returns the
@@ -284,13 +295,13 @@ def longest_skeleton_path(skeleton: np.ndarray) -> np.ndarray:
     return coords_yx[path]
 
 
-def path_length(path_yx: np.ndarray) -> float:
+def path_length(path_yx: NDArray[Any]) -> float:
     if len(path_yx) < 2:
         return float(len(path_yx))
     return float(np.sum(np.linalg.norm(np.diff(path_yx.astype(np.float32), axis=0), axis=1)))
 
 
-def local_straightness(path_yx: np.ndarray, window: float) -> float:
+def local_straightness(path_yx: NDArray[Any], window: float) -> float:
     """Median chord/arc ratio over sliding windows along the path.
 
     Tails are locally straight even where two of them cross; debris outlines and
@@ -302,7 +313,9 @@ def local_straightness(path_yx: np.ndarray, window: float) -> float:
     arc = np.concatenate([[0.0], np.cumsum(steps)])
     span = max(2, int(round(window)))
     if len(path_yx) <= span:
-        return float(np.linalg.norm((path_yx[0] - path_yx[-1]).astype(np.float32)) / max(arc[-1], 1.0))
+        return float(
+            np.linalg.norm((path_yx[0] - path_yx[-1]).astype(np.float32)) / max(arc[-1], 1.0)
+        )
     ratios = [
         float(np.linalg.norm((path_yx[a + span] - path_yx[a]).astype(np.float32)))
         / max(float(arc[a + span] - arc[a]), 1.0)
@@ -311,7 +324,7 @@ def local_straightness(path_yx: np.ndarray, window: float) -> float:
     return float(np.median(ratios))
 
 
-def crossing_number(binary: np.ndarray) -> np.ndarray:
+def crossing_number(binary: NDArray[Any]) -> NDArray[Any]:
     """0->1 transitions around each pixel's 8-neighbourhood (3+ = true junction).
 
     Unlike a plain neighbour count this ignores staircase corners on thin
@@ -321,16 +334,19 @@ def crossing_number(binary: np.ndarray) -> np.ndarray:
     h, w = binary.shape
     ring = [(0, 1), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (1, 0), (0, 0)]
     neighbors = [padded[dy : dy + h, dx : dx + w] for dy, dx in ring]
-    return sum(
-        ((neighbors[i] == 0) & (neighbors[(i + 1) % 8] == 1)).astype(np.int16) for i in range(8)
+    return cast(
+        NDArray[Any],
+        sum(
+            ((neighbors[i] == 0) & (neighbors[(i + 1) % 8] == 1)).astype(np.int16) for i in range(8)
+        ),
     )
 
 
 def find_heads(
-    component: np.ndarray,
-    skeleton: np.ndarray,
-    blob: np.ndarray,
-    darkness: np.ndarray,
+    component: NDArray[Any],
+    skeleton: NDArray[Any],
+    blob: NDArray[Any],
+    darkness: NDArray[Any],
     settings: Settings,
     scale: float,
     core_px: int,
@@ -364,10 +380,14 @@ def find_heads(
     # Split the remaining skeleton at junctions so crossings and side spurs become
     # separate segments; networks keep track of what each segment connects to.
     kernel = np.ones((3, 3), dtype=np.uint8)
-    junctions = cv2.dilate(((remainder > 0) & (crossing_number(remainder) >= 3)).astype(np.uint8), kernel)
+    junctions = cv2.dilate(
+        ((remainder > 0) & (crossing_number(remainder) >= 3)).astype(np.uint8), kernel
+    )
     segments = ((remainder > 0) & (junctions == 0)).astype(np.uint8)
     _, segment_labels, segment_stats, _ = cv2.connectedComponentsWithStats(segments, connectivity=8)
-    _, network_labels, network_stats, _ = cv2.connectedComponentsWithStats(remainder, connectivity=8)
+    _, network_labels, network_stats, _ = cv2.connectedComponentsWithStats(
+        remainder, connectivity=8
+    )
     free_ends = (segments > 0) & (crossing_number(segments) <= 1)
 
     min_branch = settings.min_tail_branch * scale
@@ -375,9 +395,9 @@ def find_heads(
     neck_reach = settings.neck_length * scale + 2.0
     terminus_reach = 5.0 * scale + 1.0
 
-    segment_info: dict[int, tuple[bool, np.ndarray]] = {}
+    segment_info: dict[int, tuple[bool, NDArray[Any]]] = {}
 
-    def describe(segment: int) -> tuple[bool, np.ndarray]:
+    def describe(segment: int) -> tuple[bool, NDArray[Any]]:
         """(tail_like, free endpoint yx array) for one skeleton segment."""
         if segment not in segment_info:
             pixels = segment_labels == segment
@@ -385,8 +405,7 @@ def find_heads(
             ends = np.argwhere(pixels & free_ends)
             network = int(network_labels[ys[0], xs[0]])
             tail_like = (
-                len(ys) >= min_segment
-                and network_stats[network, cv2.CC_STAT_AREA] >= min_branch
+                len(ys) >= min_segment and network_stats[network, cv2.CC_STAT_AREA] >= min_branch
             )
             if tail_like and len(ys) >= 2 * min_segment:
                 y0, x0 = ys.min(), xs.min()
@@ -411,13 +430,15 @@ def find_heads(
         tails = [seg for seg in touching if describe(seg)[0]]
         from_core = cv2.distanceTransform(1 - core, cv2.DIST_L2, 3)
         terminating = [
-            seg for seg in tails
+            seg
+            for seg in tails
             if any(from_core[int(y), int(x)] <= terminus_reach for y, x in describe(seg)[1])
         ]
 
         min_side = settings.min_side_branch * scale
         side = [
-            seg for seg in touching
+            seg
+            for seg in touching
             if seg not in terminating[:1] and segment_stats[seg, cv2.CC_STAT_AREA] >= min_side
         ]
 
@@ -487,15 +508,17 @@ def select_heads(candidates: list[HeadCandidate], settings: Settings, strict: bo
         if not cand.accepted:
             continue
         siblings = [
-            other for other in candidates
-            if other.reason == "no_tail_attached" and other.dark_blob_id == cand.dark_blob_id
+            other
+            for other in candidates
+            if other.reason == "no_tail_attached"
+            and other.dark_blob_id == cand.dark_blob_id
             and other.core_radius_px > cand.core_radius_px
         ]
         if siblings:
             cand.xy = list(max(siblings, key=lambda c: c.core_radius_px).xy)
 
 
-def analyze_image(gray: np.ndarray, settings: Settings | None = None) -> dict[str, Any]:
+def analyze_image(gray: NDArray[Any], settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or Settings()
     height, width = gray.shape
     scale = scale_factor(width, height, settings.magnification)
@@ -515,7 +538,7 @@ def analyze_image(gray: np.ndarray, settings: Settings | None = None) -> dict[st
         x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
         component = (labels[y0:y1, x0:x1] == label_idx).astype(np.uint8) * 255
         skeleton = prune_skeleton_endpoints(
-            skeletonize_binary(component), max(1, int(round(settings.prune_iterations * scale)))
+            skeletonize(component), max(1, int(round(settings.prune_iterations * scale)))
         )
         if not np.any(skeleton):
             continue
@@ -529,12 +552,11 @@ def analyze_image(gray: np.ndarray, settings: Settings | None = None) -> dict[st
         path_fraction = len(path) / max(1, int(np.count_nonzero(skeleton)))
         halfwidth = cv2.distanceTransform((component > 0).astype(np.uint8), cv2.DIST_L2, 3)
         thin_length = float(
-            np.count_nonzero(halfwidth[path[:, 0], path[:, 1]] <= settings.max_tail_halfwidth * scale)
+            np.count_nonzero(
+                halfwidth[path[:, 0], path[:, 1]] <= settings.max_tail_halfwidth * scale
+            )
         )
-        if (
-            thin_length < min_tail
-            or local < settings.min_local_straightness
-        ):
+        if thin_length < min_tail or local < settings.min_local_straightness:
             continue
 
         candidates: list[HeadCandidate] = []
@@ -542,8 +564,13 @@ def analyze_image(gray: np.ndarray, settings: Settings | None = None) -> dict[st
         merge_px = settings.head_merge_px * scale
         for core_px in (settings.head_core_px, settings.thin_head_core_px):
             pass_candidates = find_heads(
-                component, skeleton, masks["blob"][y0:y1, x0:x1], masks["darkness"][y0:y1, x0:x1],
-                settings, scale, core_px,
+                component,
+                skeleton,
+                masks["blob"][y0:y1, x0:x1],
+                masks["darkness"][y0:y1, x0:x1],
+                settings,
+                scale,
+                core_px,
             )
             for cand in pass_candidates:
                 cand.xy = [cand.xy[0] + x0, cand.xy[1] + y0]
@@ -598,11 +625,15 @@ def analyze_image(gray: np.ndarray, settings: Settings | None = None) -> dict[st
     }
 
 
-def render_overlay(gray: np.ndarray, result: dict[str, Any]) -> np.ndarray:
+def render_overlay(gray: NDArray[Any], result: dict[str, Any]) -> NDArray[Any]:
     rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
     overlay = rgb.astype(np.float32)
     instance_map = result["instance_map"]
-    colors = {"single": SINGLE_COLOR, "overlap_cluster": CLUSTER_COLOR, "headless_tail": HEADLESS_COLOR}
+    colors = {
+        "single": SINGLE_COLOR,
+        "overlap_cluster": CLUSTER_COLOR,
+        "headless_tail": HEADLESS_COLOR,
+    }
     for inst in result["instances"]:
         region = instance_map == inst.instance_id
         region = cv2.dilate(region.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
@@ -611,14 +642,27 @@ def render_overlay(gray: np.ndarray, result: dict[str, Any]) -> np.ndarray:
     head_number = 0
     for inst in result["instances"]:
         x, y, _, _ = inst.bbox_xywh
-        label = f"#{inst.instance_id}" if inst.kind == "headless_tail" else f"#{inst.instance_id} x{inst.head_count}"
-        cv2.putText(out, label, (x, max(14, y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[inst.kind], 2)
+        label = (
+            f"#{inst.instance_id}"
+            if inst.kind == "headless_tail"
+            else f"#{inst.instance_id} x{inst.head_count}"
+        )
+        cv2.putText(
+            out, label, (x, max(14, y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[inst.kind], 2
+        )
         for hx, hy in inst.heads_xy:
             head_number += 1
             center = (int(round(hx)), int(round(hy)))
             cv2.circle(out, center, 14, HEAD_COLOR, 2)
-            cv2.putText(out, str(head_number), (center[0] + 15, center[1] + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, HEAD_COLOR, 2)
+            cv2.putText(
+                out,
+                str(head_number),
+                (center[0] + 15, center[1] + 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                HEAD_COLOR,
+                2,
+            )
     banner = f"sperm count (heads): {result['sperm_count']}"
     cv2.putText(out, banner, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4)
     cv2.putText(out, banner, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
@@ -626,21 +670,32 @@ def render_overlay(gray: np.ndarray, result: dict[str, Any]) -> np.ndarray:
 
 
 def write_outputs(
-    image_path: Path, gray: np.ndarray, result: dict[str, Any], out_dir: Path, minimal: bool = False
+    image_path: Path,
+    gray: NDArray[Any],
+    result: dict[str, Any],
+    out_dir: Path,
+    minimal: bool = False,
 ) -> dict[str, Any]:
-    """Write per-image artifacts. minimal=True writes only original, overlay and candidate pixels."""
+    """Write per-image artifacts.
+
+    minimal=True writes only original, overlay and candidate pixels.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(gray).save(out_dir / "original.png")
     Image.fromarray(render_overlay(gray, result)).save(out_dir / "overlay.png")
     Image.fromarray(result["masks"]["sperm_pixels"]).save(out_dir / "candidate_pixels.png")
     height, width = gray.shape
     if not minimal:
-        Image.fromarray(((result["instance_map"] > 0) * 255).astype(np.uint8)).save(out_dir / "sperm_mask.png")
+        Image.fromarray(((result["instance_map"] > 0) * 255).astype(np.uint8)).save(
+            out_dir / "sperm_mask.png"
+        )
         cv2.imwrite(str(out_dir / "instance_labels.png"), result["instance_map"])
         write_crops(gray, result, out_dir / "crops")
 
-    counts = {kind: sum(1 for i in result["instances"] if i.kind == kind)
-              for kind in ("single", "overlap_cluster", "headless_tail")}
+    counts = {
+        kind: sum(1 for i in result["instances"] if i.kind == kind)
+        for kind in ("single", "overlap_cluster", "headless_tail")
+    }
     summary = {
         "image": str(image_path),
         "width": width,
@@ -648,7 +703,9 @@ def write_outputs(
         "sperm_count": result["sperm_count"],
         "single_instances": counts["single"],
         "overlap_clusters": counts["overlap_cluster"],
-        "heads_in_overlap_clusters": sum(i.head_count for i in result["instances"] if i.kind == "overlap_cluster"),
+        "heads_in_overlap_clusters": sum(
+            i.head_count for i in result["instances"] if i.kind == "overlap_cluster"
+        ),
         "headless_tail_segments": counts["headless_tail"],
         "magnification": result["magnification"],
         "noise_sigma": round(result["masks"]["noise"], 3),
@@ -657,11 +714,15 @@ def write_outputs(
     }
     if not minimal:
         with (out_dir / "instances.json").open("w") as handle:
-            json.dump({"summary": summary, "instances": [asdict(i) for i in result["instances"]]}, handle, indent=2)
+            json.dump(
+                {"summary": summary, "instances": [asdict(i) for i in result["instances"]]},
+                handle,
+                indent=2,
+            )
     return summary
 
 
-def write_crops(gray: np.ndarray, result: dict[str, Any], crops_dir: Path) -> None:
+def write_crops(gray: NDArray[Any], result: dict[str, Any], crops_dir: Path) -> None:
     crops_dir.mkdir(exist_ok=True)
     rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
     height, width = gray.shape
@@ -680,8 +741,11 @@ def collect_images(input_path: Path) -> list[Path]:
     if input_path.is_file():
         return [input_path]
     return sorted(
-        p for p in input_path.rglob("*")
-        if p.suffix.lower() in IMAGE_EXTS and not p.name.startswith("._") and "__MACOSX" not in p.parts
+        p
+        for p in input_path.rglob("*")
+        if p.suffix.lower() in IMAGE_EXTS
+        and not p.name.startswith("._")
+        and "__MACOSX" not in p.parts
         and "outputs" not in p.relative_to(input_path).parts
     )
 
@@ -705,27 +769,46 @@ def magnification_from_name(name: str) -> float | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--input", type=Path, default=PROJECT_DIR,
-                        help="Image file or folder (default: this project folder).")
-    parser.add_argument("--output-root", type=Path, default=Path("outputs/run"),
-                        help="Relative paths resolve inside this project folder.")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="Delete and recreate --output-root first.")
-    parser.add_argument("--minimal", action="store_true",
-                        help="Per image, write only original.png, overlay.png and candidate_pixels.png.")
-    parser.add_argument("--magnification", type=float, default=REFERENCE_MAGNIFICATION,
-                        help=f"Objective magnification of the inputs (default {REFERENCE_MAGNIFICATION:g}, "
-                             "the magnification the settings were tuned on).")
-    parser.add_argument("--magnification-from-filename", action="store_true",
-                        help="Use a '_<N>x_' token in a file name (e.g. caput_40x_0019) when present, "
-                             "otherwise --magnification.")
+    parser = argparse.ArgumentParser(
+        prog="eyespysc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Image file, or folder searched recursively for images.",
+    )
+    parser.add_argument(
+        "--output-root", type=Path, required=True, help="Folder to create for the results."
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Delete and recreate --output-root first."
+    )
+    parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Per image, write only original.png, overlay.png and candidate_pixels.png.",
+    )
+    parser.add_argument(
+        "--magnification",
+        type=float,
+        default=REFERENCE_MAGNIFICATION,
+        help=f"Objective magnification of the inputs (default {REFERENCE_MAGNIFICATION:g}, "
+        "the magnification the settings were tuned on).",
+    )
+    parser.add_argument(
+        "--magnification-from-filename",
+        action="store_true",
+        help="Use a '_<N>x_' token in a file name (e.g. caput_40x_0019) when present, "
+        "otherwise --magnification.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    output_root = args.output_root if args.output_root.is_absolute() else PROJECT_DIR / args.output_root
+    output_root = args.output_root
     if output_root.exists():
         if not args.overwrite:
             raise SystemExit(f"{output_root} exists; pass --overwrite to replace it.")
@@ -746,15 +829,14 @@ def main() -> None:
         out_dir = output_root / image_path.relative_to(input_root).parent / image_path.stem
         summary = write_outputs(image_path, gray, result, out_dir, minimal=args.minimal)
         rows.append(summary)
-        print(f"{image_path.relative_to(input_root)}: {summary['sperm_count']} sperm "
-              f"({summary['single_instances']} single, {summary['overlap_clusters']} overlap clusters, "
-              f"{summary['headless_tail_segments']} headless tail segments)")
+        print(
+            f"{image_path.relative_to(input_root)}: {summary['sperm_count']} sperm "
+            f"({summary['single_instances']} single, "
+            f"{summary['overlap_clusters']} overlap clusters, "
+            f"{summary['headless_tail_segments']} headless tail segments)"
+        )
 
     with (output_root / "summary.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-
-
-if __name__ == "__main__":
-    main()

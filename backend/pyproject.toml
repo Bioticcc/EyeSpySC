@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eyespysc"
+version = "0.0.0"
+description = "Deterministic sperm counting for 20x grayscale phase-contrast images"
+license = "MIT"
+requires-python = ">=3.11"
+# Pinned exactly: validated counts depend on these versions. Plain OpenCV only,
+# never contrib (see eyespysc.sperm_count.skeletonize).
+dependencies = [
+  "numpy==2.2.6",
+  "opencv-python-headless==4.13.0.92",
+  "Pillow==12.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "ruff>=0.9,<1",
+]
+packaging = [
+  "pyinstaller==6.11.1",
+]
+
+[project.scripts]
+eyespysc = "eyespysc.sperm_count:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.format]
+# Copied verbatim from SCP; see the file header.
+exclude = ["src/eyespysc/scp_helpers.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/eyespysc/scp_helpers.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["eyespysc"]
+
+# scp_helpers.py is copied unchanged from SCP (see its header); keep it verbatim
+# rather than adding annotations.
+[[tool.mypy.overrides]]
+module = "eyespysc.scp_helpers"
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

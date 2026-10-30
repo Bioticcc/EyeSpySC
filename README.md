@@ -48,9 +48,11 @@ this folder depends on it or changes it.
 - **Local-background darkness:** grayscale minus a heavily blurred background
   (`build_candidate_masks` in SCP). This is the part of SCP's pixel masking
   that still works without color.
-- **SCP helpers, copied unchanged into `scp_helpers.py`:** `skeletonize_binary`
-  (Zhang–Suen fallback), `prune_skeleton_endpoints`, and
-  `remove_small_components`. The file header records the source commit.
+- **SCP helpers, copied unchanged into `backend/src/eyespysc/scp_helpers.py`:**
+  `skeletonize_binary` with its Zhang–Suen fallback, `prune_skeleton_endpoints`,
+  and `remove_small_components`. The file header records the source commit.
+  The pipeline calls Zhang–Suen directly, so an OpenCV-contrib install cannot
+  switch it to `cv2.ximgproc.thinning`.
 - **The longest-path idea** from SCP's `skeleton_longest_path`. It is
   reimplemented here so it returns ordered points, which makes arc length and
   straightness measurable.
@@ -60,7 +62,7 @@ this folder depends on it or changes it.
 SCP's stain gate (`hue`/`sat` thresholds) cannot work on grayscale input, so it
 was replaced rather than retuned.
 
-## Pipeline (`sperm_count.py`)
+## Pipeline (`backend/src/eyespysc/sperm_count.py`)
 
 1. **Background flattening and noise estimate.** A large Gaussian background
    is subtracted. A robust (MAD) noise sigma is measured.
@@ -121,13 +123,12 @@ an accept/reject `reason`, so threshold tuning can be done from data.
 Requires Python 3.11+. From this folder:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+make backend-install   # backend/.venv with the eyespysc package and dev tools
 ```
 
-`requirements.txt` pins the exact versions used for the validated counts. Keep
-plain `opencv-python`. OpenCV-contrib switches skeletonization from Zhang–Suen
-to `cv2.ximgproc.thinning`, which changes results.
+`backend/pyproject.toml` pins the exact versions used for the validated counts
+(numpy 2.2.6, opencv-python-headless 4.13.0.92, Pillow 12.2.0). Use plain
+OpenCV, never contrib.
 
 Test images (`inputsTest/`), outputs (`outputs/`), and validation counts are
 lab data. They are git-ignored and never committed.
@@ -137,12 +138,14 @@ lab data. They are git-ignored and never committed.
 From this folder:
 
 ```bash
-.venv/bin/python sperm_count.py --output-root outputs/run --overwrite
+backend/.venv/bin/eyespysc --input inputsTest/EXAMPLE_testis_0007_TRANS.tif \
+  --output-root outputs/run --overwrite
 ```
 
-- `--input` is an image file or a folder. The default is this folder, and
-  `outputs/` is skipped. Output folders mirror the input subfolders, because
-  the same file name recurs across sessions.
+- `--input` (required) is an image file or a folder, searched recursively.
+  Subfolders named `outputs` are skipped. Output folders mirror the input
+  subfolders, because the same file name recurs across sessions.
+- `--output-root` (required) is created for the results.
 - `--minimal` writes only `original.png` (the input as an unannotated 8-bit
   PNG, for comparison), `overlay.png`, and `candidate_pixels.png` per image,
   plus the root `summary.csv`.
@@ -159,14 +162,13 @@ From this folder:
 Full batch over the test set:
 
 ```bash
-.venv/bin/python sperm_count.py --input inputsTest --output-root outputs/runFull \
+backend/.venv/bin/eyespysc --input inputsTest --output-root outputs/runFull \
   --minimal --magnification-from-filename --overwrite
 ```
 
-- Relative `--output-root` paths resolve inside this folder. `outputs/` is
-  git-ignored.
-- `--overwrite` deletes and recreates the output root. Without it, the script
+- `--overwrite` deletes and recreates the output root. Without it, the command
   refuses to touch an existing output folder.
+- `eyespysc --version` prints the version. `python -m eyespysc` also works.
 
 ## Outputs
 
@@ -188,8 +190,10 @@ Each image also gets a folder, `<output-root>/<image-stem>/`, containing:
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
+./scripts/check.sh   # version consistency, ruff, mypy --strict, pytest
 ```
+
+CI runs the same script on every push.
 
 The tests use synthetic phase-contrast-like images. They cover:
 
@@ -203,7 +207,9 @@ The tests use synthetic phase-contrast-like images. They cover:
 - junction and endpoint helpers, local straightness, and ordered path
   measurement;
 - output files, including RGB input, 16-bit input, and minimal mode;
-- magnification scaling, file-name parsing, and the 40x preset.
+- magnification scaling, file-name parsing, and the 40x preset;
+- the command line, end to end (`--version`, batch run, overwrite refusal);
+- Zhang–Suen thinning even when OpenCV-contrib is present.
 
 ## Current results on the example image
 

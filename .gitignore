@@ -32,3 +32,8 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# Build outputs
+build/
+dist/
+node_modules/
