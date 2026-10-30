@@ -1,0 +1,291 @@
+# EyeSpySC
+
+EyeSpySC (formerly ColorMask-SpermCount-CellCount) is a smaller, practical
+offshoot of **Sperm Color Pixels (SCP)**
+([SCP-SpermColorPixels](https://github.com/Bioticcc/SCP-SpermColorPixels),
+`Algorithmic_Pixel_Mask_For_Tails/algorithmic_tail_mask.py`). This project highlights and counts sperm in
+**low-contrast grayscale phase-contrast images** of the kind the lab already
+produces (for example, `EXAMPLE_testis_0007_TRANS.tif`). It needs no change to
+the current imaging setup.
+
+Like SCP, it is fully deterministic image processing. There is no model
+training and no learned image recognition.
+
+## Input requirements
+
+| Requirement | Expected |
+|---|---|
+| Magnification | **20x objective for all inputs.** Every pixel setting is tuned for 20x |
+| Imaging | Grayscale phase contrast (TRANS channel), as currently acquired by the lab |
+| Format | 8-bit or 16-bit TIFF/PNG (16-bit is scaled to 8-bit); RGB is converted to gray |
+| Frame size | About 2048×1536. Larger frames scale settings up |
+| Density | **Reasonable density.** Sperm are mostly separable, and occasional crossing or touching tails are fine |
+
+**Out of scope:**
+- Other magnifications, such as the `*_40x_*` test images.
+- Extremely crowded frames with hundreds of tangled sperm, such as
+  `20231002 cauda_0035`.
+
+Neither is expected in normal use.
+
+**Busy but reasonable frames are in scope.** For example,
+`20231215 cauda_0020` counts 52 and visually looks close to complete.
+
+## How this differs from SCP
+
+| | SCP (parent project) | This project |
+|---|---|---|
+| Input | High-contrast RGB Ward TIFFs, brown stain on a light background | 8-bit grayscale phase contrast (RGB inputs are converted to gray) |
+| Sperm-pixel cue | Brown/olive HSV stain gate plus local darkness | Hessian ridge (line) filter plus local darkness |
+| Overlap | The main open research problem (R1–R4 path search and assignment) | Assumed rare. If tails do connect, the whole mass is highlighted and its **heads** are counted |
+| Main output | Per-sperm crops for morphology review | A **sperm count** per image, plus masks, crops, and an overlay |
+
+The SCP overlap-resolution work (R-series experiments) is on hold. Nothing in
+this folder depends on it or changes it.
+
+## What was reused from SCP
+
+- **Local-background darkness:** grayscale minus a heavily blurred background
+  (`build_candidate_masks` in SCP). This is the part of SCP's pixel masking
+  that still works without color.
+- **SCP helpers, copied unchanged into `scp_helpers.py`:** `skeletonize_binary`
+  (Zhang–Suen fallback), `prune_skeleton_endpoints`, and
+  `remove_small_components`. The file header records the source commit.
+- **The longest-path idea** from SCP's `skeleton_longest_path`. It is
+  reimplemented here so it returns ordered points, which makes arc length and
+  straightness measurable.
+- **Scale handling:** pixel thresholds only grow for frames larger than the
+  reference size.
+
+SCP's stain gate (`hue`/`sat` thresholds) cannot work on grayscale input, so it
+was replaced rather than retuned.
+
+## Pipeline (`sperm_count.py`)
+
+1. **Background flattening and noise estimate.** A large Gaussian background
+   is subtracted. A robust (MAD) noise sigma is measured.
+2. **Tail pixels.** A multi-scale Hessian ridge filter (σ = 1.5, 2.5 px)
+   responds to thin dark lines. A hysteresis threshold keeps faint tail
+   stretches only when they connect to strong ones. Thresholds are expressed
+   as median + k·MAD of the ridge response, so they do not drift with sperm
+   density or debris load. A small closing bridges 1–3 px gaps.
+3. **Dark blobs.** Pixels at least 5 noise-sigmas darker than the background
+   are candidate heads, midpieces, or debris.
+4. **Sperm masses.** These are connected components of (ridge ∪ dark blob).
+   A component is kept as sperm-bearing only when its longest skeleton path:
+   - is at least 100 px long;
+   - has at least 100 px of *thin* path (half-width ≤ 3.5 px);
+   - is **locally** straight (median windowed chord/arc ≥ 0.9). Tails are
+     locally straight even where they cross, while debris outlines curl at
+     every scale.
+
+   An earlier gate (the longest path must make up at least 40% of the
+   skeleton) was removed. It rejected whole tangles of several sperm, and the
+   local-straightness test already rejects debris on its own.
+5. **Heads.** A morphological opening strips the midpiece and tail, leaving
+   thick "cores". It runs twice:
+   - with a 7 px opening, for normal heads;
+   - with a 5 px opening, for slender side-on heads.
+
+   Accepted heads from the two passes are merged. Two heads count as one when
+   they share a dark blob or lie within 15 px of each other. In the thin pass a
+   core is also rejected when any other skeleton segment of 15 px or more
+   leaves it, because otherwise a dark midpiece segment can pass for a head.
+   Nearby cores are grouped. The skeleton is split at true
+   junctions (crossing number ≥ 3). A core is a head only when **exactly one
+   tail-like segment terminates at it**:
+   - debris that a tail passes *through* has two terminating segments, so it
+     is rejected;
+   - debris that only touches the *side* of a tail has none, so it is
+     rejected;
+   - a core with no tail attached is rejected.
+
+   Inside a multi-head mass, a candidate whose neck (first 30 px of tail) is
+   much fainter than the others is treated as debris on a tail end. Real
+   midpieces are dark. This rule is applied after the two passes are merged.
+6. **Classification and count.** Each component is classified:
+
+   | Kind | Heads | Highlighted as | Counted |
+   |---|---|---|---|
+   | `single` | 1 | Green | 1 |
+   | `overlap_cluster` | 2 or more | Orange (the whole connected mass) | Number of heads |
+   | `headless_tail` | 0 | Blue | 0, reported separately |
+
+   **Sperm count = total accepted heads.**
+
+Every head candidate is written to `instances.json` with its measurements and
+an accept/reject `reason`, so threshold tuning can be done from data.
+
+## Setup
+
+Requires Python 3.11+. From this folder:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+`requirements.txt` pins the exact versions used for the validated counts. Keep
+plain `opencv-python`. OpenCV-contrib switches skeletonization from Zhang–Suen
+to `cv2.ximgproc.thinning`, which changes results.
+
+Test images (`inputsTest/`), outputs (`outputs/`), and validation counts are
+lab data. They are git-ignored and never committed.
+
+## Run
+
+From this folder:
+
+```bash
+.venv/bin/python sperm_count.py --output-root outputs/run --overwrite
+```
+
+- `--input` is an image file or a folder. The default is this folder, and
+  `outputs/` is skipped. Output folders mirror the input subfolders, because
+  the same file name recurs across sessions.
+- `--minimal` writes only `original.png` (the input as an unannotated 8-bit
+  PNG, for comparison), `overlay.png`, and `candidate_pixels.png` per image,
+  plus the root `summary.csv`.
+- `--magnification N` defaults to **20**, the lab standard. Leave it alone for
+  normal use. Other values scale every length and area by N/20 and switch on
+  an experimental relief-contrast mode from 40x up. Neither is validated, and
+  both are kept only for experiments.
+- `--magnification-from-filename` reads a `_<N>x_` token from file names (for
+  example `caput_40x_0019`) and otherwise falls back to `--magnification`. It
+  is only useful for test folders that mix in non-20x images.
+- 16-bit PNG/TIFF inputs are scaled to 8 bits by dropping the low byte, which
+  keeps them in the same brightness range as the 8-bit captures.
+
+Full batch over the test set:
+
+```bash
+.venv/bin/python sperm_count.py --input inputsTest --output-root outputs/runFull \
+  --minimal --magnification-from-filename --overwrite
+```
+
+- Relative `--output-root` paths resolve inside this folder. `outputs/` is
+  git-ignored.
+- `--overwrite` deletes and recreates the output root. Without it, the script
+  refuses to touch an existing output folder.
+
+## Outputs
+
+`<output-root>/summary.csv` holds one row per image: sperm count, single and
+overlap counts, headless tail segments, and noise and threshold values.
+
+Each image also gets a folder, `<output-root>/<image-stem>/`, containing:
+
+| File | Contents |
+|---|---|
+| `original.png` | The input as an 8-bit grayscale PNG, unannotated |
+| `overlay.png` | Colored instances, numbered head markers, and the count banner |
+| `sperm_mask.png` | Binary union of the accepted sperm masses |
+| `instance_labels.png` | 16-bit instance id map (0 = background) |
+| `candidate_pixels.png` | Raw ridge ∪ dark-blob mask before shape filtering (debug) |
+| `instances.json` | Summary, plus per-instance geometry and head-candidate diagnostics |
+| `crops/NNN_<kind>.png` | One padded crop per instance |
+
+## Tests
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The tests use synthetic phase-contrast-like images. They cover:
+
+- a single sperm and two separate sperm;
+- crossing tails (one overlap cluster, two heads counted);
+- debris and round cells (not counted);
+- debris in the middle of a tail (not a second head);
+- headless tails;
+- pure noise;
+- determinism;
+- junction and endpoint helpers, local straightness, and ordered path
+  measurement;
+- output files, including RGB input, 16-bit input, and minimal mode;
+- magnification scaling, file-name parsing, and the 40x preset.
+
+## Current results on the example image
+
+`EXAMPLE_testis_0007_TRANS.tif` gives **12 sperm**: 12 single, 0 overlap
+clusters, and 1 headless tail segment. These results were checked visually.
+
+- Every counted sperm corresponds to a visible sperm, with the marker on its
+  head.
+- Debris clumps touching tails were rejected, and so was a crossing headless
+  tail.
+- Three sperm that run off the image edge were not counted.
+
+## Known limitations
+
+- **Sperm cut off by the image border** are missed when less than about
+  100 px of tail is visible. One head on the bottom edge whose tail runs
+  through another sperm is also suppressed by the faint-neck rule.
+- **Debris on the far end of a tail** looks like a head-at-terminus. It is
+  rejected only when the mass also contains a real head with a darker neck.
+- **Headless tails that cross a headed sperm** are included in that sperm's
+  mask. They are not counted, but the mask is larger than one sperm.
+- **The thresholds were tuned on a single example image.** The local
+  straightness margin is narrow: real tails scored 0.91–0.96 and the worst
+  debris scored 0.89. Validate on more images before relying on the counts.
+- **Overlap clusters are not yet validated against manual counts.** They pass
+  the synthetic tests and look right on busy frames such as
+  `20231215 cauda_0020`.
+- **Non-20x images are out of scope.** At 40x, sperm look different, not just
+  bigger: there is relief contrast, the head is an open, hollow hook, and the
+  midpiece is a thick two-edged band. The experimental 40x preset misses most
+  heads.
+- **Heads lying on another sperm's tail** are seen as "tail passes through"
+  and are not counted. This is the main remaining miss in the 20231215
+  folder (for example the central tangle in `caput_0016`).
+- **Extremely crowded frames** (for example `20231002 cauda_0035`, with
+  hundreds of tangled sperm) are out of scope, and their counts are not
+  meaningful. See [Input requirements](#input-requirements).
+- **Some headless tails may have a curled head** that wasn't recognized (for
+  example #5 in `20231215 cauda_0020`). This can make counts slightly low.
+
+## Validation status and open counting rules
+
+**Provisional (non-expert) counts** for 12 images are in
+`validation/provisional_counts_2026-10-28.csv`, together with the algorithm's
+count from the same date. On these images the algorithm undercounted every
+time and never overcounted. It found 126 sperm against 202 counted by hand
+(about 62%).
+
+**No tuning has been done from these counts.** Expert reference counts come
+first.
+
+**Expert counts requested.** A blind bundle (original image files plus a count
+sheet with total count and notes per image, without any algorithm or
+provisional counts) was prepared
+for the supervisor in `outputs/supervisor_count_bundle_2026-10-28/` (plus a
+`.zip`). When it comes back, compare all three for the 12 images: algorithm,
+provisional, and expert.
+
+**TODO: ask the supervisor which objects count as a sperm.** The answers
+decide what the algorithm should count:
+
+| Question | Algorithm today |
+|---|---|
+| Should **detached heads** (no tail) be counted? | Not counted. A head is only recognized where a tail ends |
+| Should **headless tails** in the frame be counted, ignored, or reported separately? | Reported separately as `headless_tail` and not counted |
+| How should **sperm cut off by the border** be handled? That covers heads on the edge with little tail, and tails entering from the edge with no head | Heads with less than about 100 px of tail are missed. Edge tails without a head are not counted |
+| Should **very faint ("transparent") sperm** be included? | Often below the detection threshold |
+| Is there a **standard counting convention** for this preparation? | — |
+
+## Next steps
+
+1. **Non-sperm cells.** Develop a similar deterministic strategy to detect
+   and count non-sperm cells (round cells, germ cells, and so on). The main
+   task is separating them from debris. The rejected dark-blob and
+   round-outline components from the current pipeline (`candidate_pixels.png`
+   and the head-candidate diagnostics) are a natural starting point.
+2. **Validation set.** Collect more lab images with manual sperm counts and
+   measure count error before further tuning.
+3. **Higher-contrast imaging, if needed.** The lab **can** produce
+   higher-contrast images. This project deliberately starts with the current
+   low-contrast images because that requires **no change to lab methodology**.
+   If count accuracy, especially for faint tails or cell-versus-debris
+   separation, proves insufficient, switching to higher-contrast acquisition
+   is the fallback. SCP's stain-based masking already works on that kind of
+   input.

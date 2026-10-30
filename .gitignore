@@ -1,0 +1,34 @@
+# Lab data never enters this repository: images, counts, and all outputs.
+inputsTest/
+outputs/
+validation/
+*.tif
+*.tiff
+*.TIF
+*.TIFF
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.csv
+*.zip
+._*
+__MACOSX/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local state and environment
+.env
+*.log
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
