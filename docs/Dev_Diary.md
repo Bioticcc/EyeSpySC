@@ -97,3 +97,34 @@ The accepted file types are listed on the start screen.
 Verified locally with a temporary, uncommitted auto-load build: four real
 images loaded, counted 15/20/11/21 (as in the regression baseline), and
 overlays and stats displayed.
+
+
+## 2026-11-02: Four sperm categories
+
+The supervisor defined what to count. Sperm fall into four categories: intact,
+tail-less, head-less, and barely visible. Total sperm = intact + the larger of
+tail-less and head-less, because a loose head and a loose tail are probably
+parts of one sperm. That is also the larger of total heads and total tails.
+
+Changes:
+
+- **Tails.** Each mass now has a tail count, from the free ends of its long,
+  thin skeleton branches. A sperm with extra tails crossing it used to count as
+  one object; those tails are now head-less sperm.
+- **Heads.** Heads used to require a tail ending at them, so a head with no tail
+  was invisible. A dark blob shaped like a head (slender lens, smooth, head-sized)
+  now counts. Off a mass it is tail-less; on a mass it is a head resting on a tail.
+  Hand labeling 100 detections showed 30 false ones (debris clumps, touching round
+  cells, cell fragments). Requiring the blob to keep its shape at a lower darkness
+  threshold removed 19 of those and lost 5 of the 70 real heads.
+- **Barely visible.** A second pass with a lower bar for a tail's strongest pixel
+  (`ridge_faint_high_k` = 10). Reported separately, not in the total.
+- **Outputs.** New `summary.csv` columns, `batch_stats.csv`, a counts-and-key panel
+  on every overlay, and a color key and batch table in the app.
+
+Lowering the main threshold alone does not recover missed sperm: heads stayed at
+126–130 across `ridge_high_k` 7–21 on the review images, because merged masses
+lose heads. That is why faint tails get their own pass.
+
+All thresholds here were set by inspecting images, not against reference counts,
+so they may change. New regression baseline: `outputs/runFull_2026-11-02/`.

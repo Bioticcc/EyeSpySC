@@ -68,9 +68,11 @@ from pathlib import Path
 out = Path(sys.argv[1])
 with (out / "summary.csv").open(newline="") as handle:
     rows = list(csv.DictReader(handle))
-counts = [row["sperm_count"] for row in rows]
+counts = [row["total_sperm"] for row in rows]
 if counts != ["1"]:
     raise SystemExit(f"Packaged CLI counted {counts} on the one-sperm image, expected ['1'].")
+if not (out / "batch_stats.csv").is_file():
+    raise SystemExit("Packaged CLI did not write batch_stats.csv.")
 for name in ("original.png", "overlay.png", "candidate_pixels.png", "instances.json"):
     if not (out / "one_sperm" / name).is_file():
         raise SystemExit(f"Packaged CLI did not write {name}.")

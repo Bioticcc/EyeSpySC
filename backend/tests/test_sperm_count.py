@@ -35,6 +35,11 @@ def draw_sperm(img, head_xy, angle_deg, tail_len=260, head_value=75, tail_value=
     return tuple(int(v) for v in tail_end)
 
 
+def draw_loose_head(img, xy, angle_deg, value=95):
+    """A slender lens with no tail, sized like a real head at 20x."""
+    cv2.ellipse(img, xy, (16, 5), angle_deg, 0, 360, value, -1)
+
+
 def finish(img, rng):
     img = cv2.GaussianBlur(img, (0, 0), 0.8)
     img = img + rng.normal(0, 2.5, img.shape)
@@ -55,8 +60,19 @@ class SyntheticCountingTests(unittest.TestCase):
         img, rng = blank()
         draw_sperm(img, (150, 200), 20)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 1)
-        self.assertEqual([i.kind for i in result["instances"]], ["single"])
+        self.assertEqual(
+            result["counts"],
+            {
+                "total_sperm": 1,
+                "intact": 1,
+                "tailless": 0,
+                "headless": 0,
+                "total_heads": 1,
+                "total_tails": 1,
+                "barely_visible": 0,
+            },
+        )
+        self.assertEqual([i.kind for i in result["instances"]], ["intact"])
         self.assertTrue(heads_near(result, (150, 200)))
 
     def test_two_separate_sperm(self):
@@ -64,19 +80,20 @@ class SyntheticCountingTests(unittest.TestCase):
         draw_sperm(img, (120, 120), 10)
         draw_sperm(img, (150, 450), -15)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 2)
-        self.assertEqual(sorted(i.kind for i in result["instances"]), ["single", "single"])
+        self.assertEqual(result["counts"]["total_sperm"], 2)
+        self.assertEqual(sorted(i.kind for i in result["instances"]), ["intact", "intact"])
 
     def test_crossing_tails_become_one_overlap_cluster_counting_both_heads(self):
         img, rng = blank(2)
         draw_sperm(img, (150, 150), 35, tail_len=330)
         draw_sperm(img, (150, 520), -35, tail_len=330)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 2)
+        self.assertEqual(result["counts"]["total_sperm"], 2)
+        self.assertEqual(result["counts"]["intact"], 2)
         self.assertEqual(len(result["instances"]), 1)
         cluster = result["instances"][0]
         self.assertEqual(cluster.kind, "overlap_cluster")
-        self.assertEqual(cluster.head_count, 2)
+        self.assertEqual((cluster.head_count, cluster.tail_count), (2, 2))
         self.assertTrue(heads_near(result, (150, 150)))
         self.assertTrue(heads_near(result, (150, 520)))
 
@@ -87,7 +104,7 @@ class SyntheticCountingTests(unittest.TestCase):
         cv2.circle(img, (500, 150), 30, 110, 2)  # round cell outline
         cv2.circle(img, (500, 150), 22, 125, -1)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 0)
+        self.assertEqual(result["counts"]["total_sperm"], 0)
         self.assertEqual(result["instances"], [])
 
     def test_debris_on_middle_of_tail_is_not_a_second_head(self):
@@ -95,15 +112,83 @@ class SyntheticCountingTests(unittest.TestCase):
         draw_sperm(img, (120, 300), 0, tail_len=400)
         cv2.circle(img, (320, 300), 10, 85, -1)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 1)
+        self.assertEqual(result["counts"]["total_heads"], 1)
+        self.assertEqual(result["counts"]["total_sperm"], 1)
         self.assertTrue(heads_near(result, (120, 300)))
 
-    def test_headless_tail_is_reported_but_not_counted(self):
+    def test_tail_only_counts_as_a_sperm_and_a_tail_but_not_a_head(self):
         img, rng = blank(5)
         cv2.line(img, (100, 400), (500, 250), 118, 2)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["sperm_count"], 0)
-        self.assertEqual([i.kind for i in result["instances"]], ["headless_tail"])
+        counts = result["counts"]
+        self.assertEqual(
+            (counts["total_sperm"], counts["headless"], counts["total_tails"]), (1, 1, 1)
+        )
+        self.assertEqual(counts["total_heads"], 0)
+        self.assertEqual([i.kind for i in result["instances"]], ["headless"])
+
+    def test_head_only_counts_as_a_sperm_and_a_head_but_not_a_tail(self):
+        img, rng = blank(14)
+        draw_loose_head(img, (400, 300), 30)
+        result = sc.analyze_image(finish(img, rng))
+        counts = result["counts"]
+        self.assertEqual(
+            (counts["total_sperm"], counts["tailless"], counts["total_heads"]), (1, 1, 1)
+        )
+        self.assertEqual(counts["total_tails"], 0)
+        self.assertEqual([i.kind for i in result["instances"]], ["tailless"])
+        self.assertTrue(heads_near(result, (400, 300)))
+
+    def test_two_touching_round_cells_are_not_a_head(self):
+        img, rng = blank(15)
+        cv2.circle(img, (400, 300), 9, 95, -1)
+        cv2.circle(img, (422, 300), 9, 95, -1)
+        cv2.circle(img, (411, 300), 40, 125, -1)
+        cv2.circle(img, (400, 300), 9, 95, -1)
+        cv2.circle(img, (422, 300), 9, 95, -1)
+        result = sc.analyze_image(finish(img, rng))
+        self.assertEqual(result["counts"]["tailless"], 0)
+
+    def test_total_is_intact_plus_the_larger_of_tailless_and_headless(self):
+        img, rng = blank(16)
+        draw_sperm(img, (120, 120), 10)
+        cv2.line(img, (100, 500), (500, 350), 118, 2)
+        draw_loose_head(img, (700, 600), 60)
+        draw_loose_head(img, (780, 250), 20)
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual(
+            counts,
+            {
+                "total_sperm": 3,
+                "intact": 1,
+                "tailless": 2,
+                "headless": 1,
+                "total_heads": 3,
+                "total_tails": 2,
+                "barely_visible": 0,
+            },
+        )
+
+    def test_barely_visible_tail_is_reported_but_not_in_the_total(self):
+        img, rng = blank(19)
+        draw_sperm(img, (120, 120), 10)
+        cv2.line(img, (100, 550), (600, 420), 128, 2)
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual(counts["barely_visible"], 1)
+        self.assertEqual(counts["total_sperm"], 1)
+        self.assertEqual(counts["total_tails"], 1)
+
+    def test_tail_crossing_a_sperm_is_a_second_tail_on_the_mass(self):
+        img, rng = blank(17)
+        draw_sperm(img, (150, 300), 0, tail_len=380)
+        cv2.line(img, (400, 120), (400, 520), 118, 2)
+        result = sc.analyze_image(finish(img, rng))
+        self.assertEqual(len(result["instances"]), 1)
+        mass = result["instances"][0]
+        self.assertEqual(mass.kind, "overlap_cluster")
+        self.assertEqual((mass.head_count, mass.tail_count), (1, 2))
+        counts = result["counts"]
+        self.assertEqual((counts["total_sperm"], counts["intact"], counts["headless"]), (2, 1, 1))
 
     def test_pure_noise_produces_nothing(self):
         img, rng = blank(6)
@@ -164,7 +249,7 @@ class HelperTests(unittest.TestCase):
         with mock.patch.object(
             cv2, "ximgproc", types.SimpleNamespace(thinning=contrib_thinning), create=True
         ):
-            self.assertEqual(sc.analyze_image(gray)["sperm_count"], 1)
+            self.assertEqual(sc.analyze_image(gray)["counts"]["total_sperm"], 1)
 
 
 class MagnificationTests(unittest.TestCase):
@@ -199,11 +284,30 @@ class MagnificationTests(unittest.TestCase):
         gray = np.clip(img, 0, 255).astype(np.uint8)
         settings = sc.Settings(magnification=40)  # scaling only, no relief preset
         result = sc.analyze_image(gray, settings)
-        self.assertEqual(result["sperm_count"], 1)
+        self.assertEqual(result["counts"]["total_sperm"], 1)
         self.assertTrue(heads_near(result, (300, 400), tol=40))
 
 
 class OutputTests(unittest.TestCase):
+    def test_batch_stats_rows(self):
+        rows = [
+            dict.fromkeys(sc.COUNT_COLUMNS, 0) | {"total_sperm": value} for value in (10, 20, 60)
+        ]
+        stats = {row["count"]: row for row in sc.batch_stats_rows(rows)}
+        self.assertEqual(
+            stats["total_sperm"],
+            {"count": "total_sperm", "total": 90, "mean": 30, "median": 20, "min": 10, "max": 60},
+        )
+
+    def test_overlay_shows_the_count_key(self):
+        img, rng = blank(18)
+        draw_sperm(img, (300, 400), 20)
+        gray = finish(img, rng)
+        overlay = sc.render_overlay(gray, sc.analyze_image(gray))
+        self.assertEqual(overlay.shape, (*gray.shape, 3))
+        # The intact swatch sits in the top-left panel.
+        self.assertEqual(tuple(int(v) for v in overlay[44, 16]), sc.INTACT_COLOR)
+
     def test_write_outputs_and_rgb_input(self):
         img, rng = blank(8)
         draw_sperm(img, (150, 200), 20)
@@ -227,7 +331,7 @@ class OutputTests(unittest.TestCase):
                 self.assertTrue((out_dir / name).exists(), name)
             self.assertEqual(len(list((out_dir / "crops").glob("*.png"))), len(result["instances"]))
             data = json.loads((out_dir / "instances.json").read_text())
-            self.assertEqual(data["summary"]["sperm_count"], summary["sperm_count"])
+            self.assertEqual(data["summary"]["total_sperm"], summary["total_sperm"])
             self.assertEqual(len(data["instances"]), len(result["instances"]))
             labels = cv2.imread(str(out_dir / "instance_labels.png"), cv2.IMREAD_UNCHANGED)
             self.assertEqual(labels.dtype, np.uint16)
@@ -247,7 +351,7 @@ class OutputTests(unittest.TestCase):
             )
             original = cv2.imread(str(out_dir / "original.png"), cv2.IMREAD_UNCHANGED)
             self.assertTrue(np.array_equal(original, gray))
-            self.assertEqual(summary["sperm_count"], 1)
+            self.assertEqual(summary["total_sperm"], 1)
 
     def test_16bit_input_is_scaled_not_clipped(self):
         img, rng = blank(10)
@@ -259,7 +363,7 @@ class OutputTests(unittest.TestCase):
             loaded = sc.load_gray(src)
             self.assertEqual(loaded.dtype, np.uint8)
             self.assertTrue(np.array_equal(loaded, gray))
-            self.assertEqual(sc.analyze_image(loaded)["sperm_count"], 1)
+            self.assertEqual(sc.analyze_image(loaded)["counts"]["total_sperm"], 1)
 
 
 class CommandLineTests(unittest.TestCase):
@@ -287,8 +391,14 @@ class CommandLineTests(unittest.TestCase):
             self.assertIn("one_sperm.png: 1 sperm", done.stdout)
             with (out / "summary.csv").open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual([row["sperm_count"] for row in rows], ["1"])
+            self.assertEqual([row["total_sperm"] for row in rows], ["1"])
+            self.assertEqual([row["total_heads"] for row in rows], ["1"])
+            self.assertEqual([row["total_tails"] for row in rows], ["1"])
             self.assertTrue((out / "session" / "one_sperm" / "overlay.png").exists())
+            with (out / "batch_stats.csv").open(newline="") as handle:
+                stats = {row["count"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(list(stats), list(sc.COUNT_COLUMNS))
+            self.assertEqual(stats["total_sperm"]["total"], "1")
 
             again = self.run_cli("--input", str(inputs), "--output-root", str(out))
             self.assertNotEqual(again.returncode, 0)
@@ -315,10 +425,13 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(events[0]["total"], 2)
             first = events[1]
             self.assertEqual((first["index"], first["name"]), (1, "a.png"))
-            self.assertEqual(first["summary"]["sperm_count"], 1)
+            self.assertEqual(first["summary"]["total_sperm"], 1)
             self.assertTrue(Path(first["overlay"]).is_file())
             self.assertTrue(Path(first["original"]).is_file())
             self.assertEqual(Path(events[-1]["summary_csv"]), (out / "summary.csv").resolve())
+            self.assertEqual(
+                Path(events[-1]["batch_stats_csv"]), (out / "batch_stats.csv").resolve()
+            )
 
     def test_preview_only_writes_previews_and_no_counts(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,6 +1,6 @@
 [package]
 name = "eyespysc-desktop"
-version = "0.1.0-rc.4"
+version = "0.1.0-rc.5"
 description = "Sperm counting for 20x phase-contrast images"
 authors = ["Yan Lab <adamward.bio@gmail.com>"]
 license = "MIT"

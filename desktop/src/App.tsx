@@ -18,7 +18,9 @@ import {
 import {
   baseName,
   batchStats,
+  COLOR_KEY,
   compareToMean,
+  countTable,
   folderTimestamp,
   formatNumber,
   parentPath,
@@ -215,10 +217,9 @@ export default function App() {
   const isCounted = Boolean(item?.summary);
   const mainPath = isCounted && showOverlay ? item?.overlay : item?.preview;
 
-  const stats = useMemo(
-    () => batchStats(items.flatMap((entry) => (entry.summary ? [entry.summary.sperm_count] : []))),
-    [items],
-  );
+  const summaries = useMemo(() => items.flatMap((entry) => (entry.summary ? [entry.summary] : [])), [items]);
+  const stats = useMemo(() => batchStats(summaries.map((summary) => summary.total_sperm)), [summaries]);
+  const table = useMemo(() => countTable(summaries), [summaries]);
 
   const title =
     phase === "empty"
@@ -376,6 +377,20 @@ export default function App() {
                       )}
                       {item && <span className="viewer-tag">{tag}</span>}
                     </div>
+                    {isCounted && showOverlay && (
+                      <ul className="color-key" aria-label="Overlay color key">
+                        {COLOR_KEY.map(({ label, rgb, ring }) => (
+                          <li key={label}>
+                            <i
+                              className={ring ? "swatch ring" : "swatch"}
+                              style={ring ? { borderColor: `rgb(${rgb.join(",")})` } : { background: `rgb(${rgb.join(",")})` }}
+                              aria-hidden="true"
+                            />
+                            {label}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     <div className="filmstrip" role="group" aria-label="All images">
                       {items.map((entry, index) =>
                         entry ? (
@@ -387,7 +402,7 @@ export default function App() {
                             type="button"
                             className="thumb"
                             aria-current={index === current}
-                            aria-label={entry.summary ? `${entry.name}, ${entry.summary.sperm_count} sperm` : entry.name}
+                            aria-label={entry.summary ? `${entry.name}, ${entry.summary.total_sperm} sperm` : entry.name}
                             title={entry.name}
                             onClick={() => setCurrent(index)}
                           >
@@ -396,7 +411,7 @@ export default function App() {
                             ) : (
                               <span className="thumb-empty" />
                             )}
-                            {entry.summary && <b>{entry.summary.sperm_count}</b>}
+                            {entry.summary && <b>{entry.summary.total_sperm}</b>}
                           </button>
                         ) : null,
                       )}
@@ -457,19 +472,17 @@ export default function App() {
                           {item?.summary && stats ? (
                             <>
                               <div className="big-count">
-                                <strong>{item.summary.sperm_count}</strong>
-                                <span>sperm</span>
+                                <strong>{item.summary.total_sperm}</strong>
+                                <span>total sperm</span>
                               </div>
-                              <div className="kv"><span>Single sperm</span><b>{item.summary.single_instances}</b></div>
-                              <div className="kv">
-                                <span>In overlap clusters</span>
-                                <b>
-                                  {item.summary.heads_in_overlap_clusters}
-                                  {item.summary.overlap_clusters > 0 && ` (${plural(item.summary.overlap_clusters, "cluster")})`}
-                                </b>
-                              </div>
-                              <div className="kv"><span>Headless tails, not counted</span><b>{item.summary.headless_tail_segments}</b></div>
-                              <p className="versus">{compareToMean(item.summary.sperm_count, stats.mean)}</p>
+                              <p className="count-rule">Intact + the larger of tail-less and head-less</p>
+                              <div className="kv"><span>Intact</span><b>{item.summary.intact}</b></div>
+                              <div className="kv"><span>Tail-less</span><b>{item.summary.tailless}</b></div>
+                              <div className="kv"><span>Head-less</span><b>{item.summary.headless}</b></div>
+                              <div className="kv kv-gap"><span>Total heads</span><b>{item.summary.total_heads}</b></div>
+                              <div className="kv"><span>Total tails</span><b>{item.summary.total_tails}</b></div>
+                              <div className="kv"><span>Barely visible, not in total</span><b>{item.summary.barely_visible}</b></div>
+                              <p className="versus">{compareToMean(item.summary.total_sperm, stats.mean)}</p>
                             </>
                           ) : (
                             <p className="run-status">Not counted.</p>
@@ -480,17 +493,33 @@ export default function App() {
                             <h2 className="side-heading">
                               {stats.images === items.length ? `All ${plural(stats.images, "image")}` : `${stats.images} of ${items.length} images`}
                             </h2>
-                            <div className="metric-row batch-metrics">
-                              <div className="metric-card"><strong>{stats.total}</strong><span>total sperm</span></div>
-                              <div className="metric-card"><strong>{formatNumber(stats.mean)}</strong><span>mean per image</span></div>
-                              <div className="metric-card"><strong>{formatNumber(stats.median)}</strong><span>median</span></div>
-                              <div className="metric-card"><strong>{stats.min}–{stats.max}</strong><span>range</span></div>
-                            </div>
+                            <table className="batch-table">
+                              <thead>
+                                <tr>
+                                  <th scope="col"><span className="visually-hidden">Count</span></th>
+                                  <th scope="col">Total</th>
+                                  <th scope="col">Mean</th>
+                                  <th scope="col">Median</th>
+                                  <th scope="col">Range</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {table.map(({ key, label, stats: row }) => (
+                                  <tr key={key} className={key === "total_sperm" ? "lead" : undefined}>
+                                    <th scope="row">{label}</th>
+                                    <td>{row.total}</td>
+                                    <td>{formatNumber(row.mean)}</td>
+                                    <td>{formatNumber(row.median)}</td>
+                                    <td>{row.min}–{row.max}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </section>
                         )}
                         <section>
                           <p className="saved-note">
-                            Saved <code>summary.csv</code> and every overlay to <code>{outputRoot}</code>
+                            Saved <code>summary.csv</code>, <code>batch_stats.csv</code> and every overlay to <code>{outputRoot}</code>
                           </p>
                           <button className="button secondary small" type="button" onClick={() => void openDirectory(outputRoot).catch((reason) => setError(message(reason)))}>
                             Open results folder

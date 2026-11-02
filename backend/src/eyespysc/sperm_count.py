@@ -5,9 +5,12 @@ local-background darkness idea and skeleton helpers, but replaces the brown
 stain color gate (which needs RGB Ward images) with a multi-scale Hessian ridge
 filter that finds faint thin dark tails in grayscale phase-contrast images.
 
-Inputs are assumed to contain little or no tail overlap. When one connected
-sperm mass contains more than one head, the whole mass is highlighted as an
-overlap cluster and its heads are counted individually.
+Sperm are intact (head and tail), tail-less (head only), head-less (tail only),
+or barely visible. A loose head and a loose tail are probably parts of one sperm,
+so total sperm = intact + the larger of tail-less and head-less. When one
+connected mass holds several sperm, the whole mass is highlighted as an overlap
+cluster and its heads and tails are still counted individually. Barely visible
+tails are reported separately and are not in the total.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import csv
 import json
 import re
 import shutil
+import statistics
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -46,10 +50,23 @@ REFERENCE_MAGNIFICATION = 20.0
 PREVIEW_LONG_SIDE = 1600
 THUMB_LONG_SIDE = 240
 
-SINGLE_COLOR = (0, 220, 90)
+# The desktop app's color key repeats these (a test keeps them equal).
+INTACT_COLOR = (0, 220, 90)
 CLUSTER_COLOR = (255, 140, 0)
 HEADLESS_COLOR = (0, 170, 255)
+TAILLESS_COLOR = (230, 70, 230)
+BARELY_VISIBLE_COLOR = (240, 220, 60)
 HEAD_COLOR = (255, 40, 40)
+
+COUNT_COLUMNS = (
+    "total_sperm",
+    "intact",
+    "tailless",
+    "headless",
+    "total_heads",
+    "total_tails",
+    "barely_visible",
+)
 
 
 @dataclass
@@ -65,6 +82,8 @@ class Settings:
     # thresholds do not drift with how many sperm or how much debris is present.
     ridge_low_k: float = 2.1
     ridge_high_k: float = 21.0
+    # Tails with no pixel reaching ridge_high_k but one reaching this are barely visible.
+    ridge_faint_high_k: float = 10.0
     ridge_close_px: int = 5
     head_dark_noise_k: float = 5.0
     head_core_px: int = 7  # opening diameter; strips midpiece/tail, keeps head cores
@@ -82,7 +101,9 @@ class Settings:
     max_tail_halfwidth: float = 3.5
     min_local_straightness: float = 0.9  # median chord/arc over straightness_window
     straightness_window: float = 30.0
-    min_tail_branch: float = 40.0  # length of the skeleton network a head's tail joins
+    # Length of the skeleton network a head's tail joins, and of a branch that
+    # counts as a tail end when counting the tails in a mass.
+    min_tail_branch: float = 40.0
     min_tail_segment: float = 12.0  # first segment leaving the head, before any junction
     min_branch_straightness: float = 0.5
     neck_length: float = 30.0
@@ -92,6 +113,23 @@ class Settings:
     faint_neck_darkness: float = 5.0
     faint_neck_ratio: float = 0.5
     prune_iterations: int = 3
+    # A dark blob with no tail of its own is a head only if it has the slender
+    # lens shape of a sperm head. Round cells and clumped debris are too round,
+    # too wide, or too ragged. Sizes are of the blob's minimum-area rectangle.
+    lens_min_area: int = 120
+    lens_max_area: int = 450
+    lens_min_aspect: float = 2.0
+    lens_min_width: float = 6.5
+    lens_max_width: float = 14.0
+    lens_max_length: float = 70.0
+    lens_min_solidity: float = 0.78
+    # On a mass a dark midpiece stretch can look like a thin lens; heads are wider.
+    lens_on_mass_min_width: float = 8.0
+    # A loose head keeps its shape at a lower darkness threshold. A debris clump or
+    # a piece of a round cell grows there into something larger and rounder.
+    lens_faint_darkness: float = 2.5
+    lens_faint_max_growth: float = 1.8
+    lens_faint_min_aspect: float = 1.9
 
 
 @dataclass
@@ -112,8 +150,9 @@ class HeadCandidate:
 @dataclass
 class SpermInstance:
     instance_id: int
-    kind: str  # "single" | "overlap_cluster" | "headless_tail"
+    kind: str  # "intact" | "tailless" | "headless" | "overlap_cluster" | "barely_visible"
     head_count: int
+    tail_count: int
     bbox_xywh: list[int]
     area_px: int
     tail_length_px: float
@@ -239,6 +278,8 @@ def build_masks(gray: NDArray[Any], settings: Settings) -> dict[str, Any]:
         "blob": blob,
         "sperm_pixels": cv2.bitwise_or(ridge, blob),
         "darkness": smooth_dark / noise,
+        "response": response,
+        "ridge_faint_high": median + settings.ridge_faint_high_k * spread,
         "noise": noise,
         "ridge_low": low,
         "ridge_high": high,
@@ -525,6 +566,276 @@ def select_heads(candidates: list[HeadCandidate], settings: Settings, strict: bo
             cand.xy = list(max(siblings, key=lambda c: c.core_radius_px).xy)
 
 
+def count_tails(
+    skeleton: NDArray[Any], halfwidth: NDArray[Any], settings: Settings, scale: float
+) -> int:
+    """Tails in one mass, from the free ends of its long, thin skeleton branches.
+
+    A tail has two ends and a crossing of two tails leaves four, so a mass holds
+    ceil(ends / 2) tails. Short spurs and branches through thick debris have no
+    say. A mass with no qualifying end (a closed loop) still holds one tail.
+    """
+    binary = (skeleton > 0).astype(np.uint8)
+    crossings = crossing_number(binary)
+    junctions = cv2.dilate(
+        ((binary > 0) & (crossings >= 3)).astype(np.uint8), np.ones((3, 3), dtype=np.uint8)
+    )
+    branches = ((binary > 0) & (junctions == 0)).astype(np.uint8)
+    n_branches, labels, stats, _ = cv2.connectedComponentsWithStats(branches, connectivity=8)
+    free_ends = (binary > 0) & (crossings <= 1)
+    ends = 0
+    for branch in range(1, n_branches):
+        if stats[branch, cv2.CC_STAT_AREA] < settings.min_tail_branch * scale:
+            continue
+        pixels = labels == branch
+        if np.median(halfwidth[pixels]) <= settings.max_tail_halfwidth * scale:
+            ends += int(np.count_nonzero(pixels & free_ends))
+    return max(1, (ends + 1) // 2)
+
+
+def outline_shape(local: NDArray[Any]) -> tuple[NDArray[Any], float, float]:
+    """(outer contour, length, width) of a binary region, from its minimum-area rectangle."""
+    contours, _ = cv2.findContours(local, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contour = max(contours, key=cv2.contourArea)
+    _, sides, _ = cv2.minAreaRect(contour)
+    return contour, max(sides), max(min(sides), 1.0)
+
+
+def find_lens_blobs(blob: NDArray[Any], settings: Settings, scale: float) -> list[dict[str, Any]]:
+    """Dark blobs shaped like a sperm head: slender, smooth, and head-sized."""
+    n_blobs, labels, stats, centroids = cv2.connectedComponentsWithStats(blob, connectivity=8)
+    lenses = []
+    for label in range(1, n_blobs):
+        x, y, w, h, area = (int(v) for v in stats[label])
+        if not settings.lens_min_area * scale**2 <= area <= settings.lens_max_area * scale**2:
+            continue
+        local = (labels[y : y + h, x : x + w] == label).astype(np.uint8)
+        contour, length, width = outline_shape(local)
+        hull_area = max(float(cv2.contourArea(cv2.convexHull(contour))), 1.0)
+        if (
+            length / width >= settings.lens_min_aspect
+            and settings.lens_min_width * scale <= width <= settings.lens_max_width * scale
+            and length <= settings.lens_max_length * scale
+            and cv2.contourArea(contour) / hull_area >= settings.lens_min_solidity
+        ):
+            ys, xs = np.nonzero(local)
+            lenses.append(
+                {
+                    "xy": [float(centroids[label][0]), float(centroids[label][1])],
+                    "bbox": [x, y, w, h],
+                    "area": area,
+                    "width": width,
+                    "ys": ys + y,
+                    "xs": xs + x,
+                }
+            )
+    return lenses
+
+
+def keeps_lens_shape_when_faint(
+    lens: dict[str, Any], faint_labels: NDArray[Any], faint_stats: NDArray[Any], settings: Settings
+) -> bool:
+    owners = faint_labels[lens["ys"], lens["xs"]]
+    if not np.any(owners):
+        return False
+    label = int(np.bincount(owners[owners > 0]).argmax())
+    x, y, w, h, area = (int(v) for v in faint_stats[label])
+    if area > settings.lens_faint_max_growth * lens["area"]:
+        return False
+    local = (faint_labels[y : y + h, x : x + w] == label).astype(np.uint8)
+    _, length, width = outline_shape(local)
+    return length / width >= settings.lens_faint_min_aspect
+
+
+def add_lens_heads(
+    instances: list[SpermInstance],
+    instance_map: NDArray[Any],
+    masks: dict[str, Any],
+    settings: Settings,
+    scale: float,
+) -> None:
+    """Add heads the tail-terminus test cannot see, in place.
+
+    A lens-shaped blob on a mass is a head resting on a tail; one with no mass
+    is a tail-less sperm.
+    """
+    merge_px = settings.head_merge_px * scale
+    faint = cv2.morphologyEx(
+        (masks["darkness"] >= settings.lens_faint_darkness).astype(np.uint8),
+        cv2.MORPH_OPEN,
+        np.ones((3, 3), dtype=np.uint8),
+    )
+    _, faint_labels, faint_stats, _ = cv2.connectedComponentsWithStats(faint, connectivity=8)
+    for lens in find_lens_blobs(masks["blob"], settings, scale):
+        ys, xs = lens["ys"], lens["xs"]
+        owners = instance_map[ys, xs]
+        owner = int(np.bincount(owners).argmax()) if np.any(owners) else 0
+        if owner == 0:
+            if not keeps_lens_shape_when_faint(lens, faint_labels, faint_stats, settings):
+                continue
+            instance_id = len(instances) + 1
+            instance_map[ys, xs] = instance_id
+            instances.append(
+                SpermInstance(
+                    instance_id=instance_id,
+                    kind="tailless",
+                    head_count=1,
+                    tail_count=0,
+                    bbox_xywh=lens["bbox"],
+                    area_px=lens["area"],
+                    tail_length_px=0.0,
+                    straightness=0.0,
+                    local_straightness=0.0,
+                    path_fraction=0.0,
+                    heads_xy=[[round(lens["xy"][0], 1), round(lens["xy"][1], 1)]],
+                )
+            )
+            continue
+        mass = instances[owner - 1]
+        if lens["width"] < settings.lens_on_mass_min_width * scale or any(
+            np.min(np.hypot(xs - hx, ys - hy)) <= merge_px for hx, hy in mass.heads_xy
+        ):
+            continue
+        mass.heads_xy.append([round(lens["xy"][0], 1), round(lens["xy"][1], 1)])
+        mass.head_count += 1
+        mass.head_candidates.append(
+            HeadCandidate(
+                xy=lens["xy"],
+                core_area_px=lens["area"],
+                tail_branches=0,
+                terminating_branches=0,
+                side_branches=0,
+                neck_darkness=0.0,
+                core_radius_px=0.0,
+                dark_blob_id=-1,
+                accepted=True,
+                reason="lens_shape",
+            )
+        )
+
+
+def measure_tail_mass(
+    component: NDArray[Any], settings: Settings, scale: float
+) -> dict[str, Any] | None:
+    """Skeleton measurements of a connected mass, or None if it holds no tail.
+
+    A mass holds a tail when its longest path is long, thin, and locally straight.
+    """
+    min_tail = settings.min_tail_length * scale
+    skeleton = prune_skeleton_endpoints(
+        skeletonize(component), max(1, int(round(settings.prune_iterations * scale)))
+    )
+    if not np.any(skeleton):
+        return None
+    path = longest_skeleton_path(skeleton)
+    length = path_length(path)
+    if length < min_tail:
+        return None
+    chord = float(np.linalg.norm((path[0] - path[-1]).astype(np.float32)))
+    local = local_straightness(path, settings.straightness_window * scale)
+    halfwidth = cv2.distanceTransform((component > 0).astype(np.uint8), cv2.DIST_L2, 3)
+    thin_length = float(
+        np.count_nonzero(halfwidth[path[:, 0], path[:, 1]] <= settings.max_tail_halfwidth * scale)
+    )
+    if thin_length < min_tail or local < settings.min_local_straightness:
+        return None
+    return {
+        "skeleton": skeleton,
+        "halfwidth": halfwidth,
+        "length": length,
+        "straightness": chord / max(length, 1.0),
+        "local_straightness": local,
+        "path_fraction": len(path) / max(1, int(np.count_nonzero(skeleton))),
+    }
+
+
+def add_barely_visible(
+    instances: list[SpermInstance],
+    instance_map: NDArray[Any],
+    masks: dict[str, Any],
+    settings: Settings,
+    scale: float,
+) -> None:
+    """Add tails too faint for the main pass, in place, as their own kind.
+
+    The same low threshold and shape tests apply, with a lower bar for the
+    strongest pixel. Anything the main pass already saw (accepted or rejected)
+    is excluded, and so is anything touching a counted mass.
+    """
+    close_px = max(3, int(round(settings.ridge_close_px * scale)) | 1)
+    faint = cv2.morphologyEx(
+        hysteresis_mask(masks["response"], masks["ridge_low"], masks["ridge_faint_high"]),
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_px, close_px)),
+    )
+    height, width = faint.shape
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(faint, connectivity=8)
+    min_tail = settings.min_tail_length * scale
+    pad = 2
+    for label_idx in range(1, n_labels):
+        x, y, w, h, area = (int(v) for v in stats[label_idx])
+        if max(w, h) < min_tail * 0.5:
+            continue
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
+        region = labels[y0:y1, x0:x1] == label_idx
+        if np.any(masks["ridge"][y0:y1, x0:x1][region]) or np.any(
+            instance_map[y0:y1, x0:x1][region]
+        ):
+            continue
+        component = region.astype(np.uint8) * 255
+        mass = measure_tail_mass(component, settings, scale)
+        if mass is None:
+            continue
+        instance_id = len(instances) + 1
+        instance_map[y0:y1, x0:x1][region] = instance_id
+        instances.append(
+            SpermInstance(
+                instance_id=instance_id,
+                kind="barely_visible",
+                head_count=0,
+                tail_count=count_tails(mass["skeleton"], mass["halfwidth"], settings, scale),
+                bbox_xywh=[x, y, w, h],
+                area_px=area,
+                tail_length_px=round(mass["length"], 1),
+                straightness=round(mass["straightness"], 3),
+                local_straightness=round(mass["local_straightness"], 3),
+                path_fraction=round(mass["path_fraction"], 3),
+            )
+        )
+
+
+def classify_mass(head_count: int, tail_count: int) -> str:
+    if head_count == 0 and tail_count == 1:
+        return "headless"
+    if head_count == 1 and tail_count == 1:
+        return "intact"
+    return "overlap_cluster"
+
+
+def count_totals(instances: list[SpermInstance]) -> dict[str, int]:
+    """Counts for one image. Total sperm = intact + max(tail-less, head-less).
+
+    Because intact + tail-less is every head and intact + head-less is every tail,
+    that is also the larger of total heads and total tails. Barely visible tails
+    are counted on their own and join nothing else.
+    """
+    counted = [i for i in instances if i.kind != "barely_visible"]
+    total_heads = sum(i.head_count for i in counted)
+    total_tails = sum(i.tail_count for i in counted)
+    intact = sum(min(i.head_count, i.tail_count) for i in counted)
+    tailless, headless = total_heads - intact, total_tails - intact
+    return {
+        "total_sperm": intact + max(tailless, headless),
+        "intact": intact,
+        "tailless": tailless,
+        "headless": headless,
+        "total_heads": total_heads,
+        "total_tails": total_tails,
+        "barely_visible": sum(i.tail_count for i in instances if i.kind == "barely_visible"),
+    }
+
+
 def analyze_image(gray: NDArray[Any], settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or Settings()
     height, width = gray.shape
@@ -544,27 +855,10 @@ def analyze_image(gray: NDArray[Any], settings: Settings | None = None) -> dict[
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
         component = (labels[y0:y1, x0:x1] == label_idx).astype(np.uint8) * 255
-        skeleton = prune_skeleton_endpoints(
-            skeletonize(component), max(1, int(round(settings.prune_iterations * scale)))
-        )
-        if not np.any(skeleton):
+        mass = measure_tail_mass(component, settings, scale)
+        if mass is None:
             continue
-        path = longest_skeleton_path(skeleton)
-        length = path_length(path)
-        if length < min_tail:
-            continue
-        chord = float(np.linalg.norm((path[0] - path[-1]).astype(np.float32)))
-        straightness = chord / max(length, 1.0)
-        local = local_straightness(path, settings.straightness_window * scale)
-        path_fraction = len(path) / max(1, int(np.count_nonzero(skeleton)))
-        halfwidth = cv2.distanceTransform((component > 0).astype(np.uint8), cv2.DIST_L2, 3)
-        thin_length = float(
-            np.count_nonzero(
-                halfwidth[path[:, 0], path[:, 1]] <= settings.max_tail_halfwidth * scale
-            )
-        )
-        if thin_length < min_tail or local < settings.min_local_straightness:
-            continue
+        skeleton = mass["skeleton"]
 
         candidates: list[HeadCandidate] = []
         accepted: list[HeadCandidate] = []
@@ -598,38 +892,68 @@ def analyze_image(gray: NDArray[Any], settings: Settings | None = None) -> dict[
             candidates.extend(pass_candidates)
         drop_faint_necks(accepted, settings)
         heads = [cand.xy for cand in accepted if cand.accepted]
-        if len(heads) == 0:
-            kind = "headless_tail"
-        elif len(heads) == 1:
-            kind = "single"
-        else:
-            kind = "overlap_cluster"
 
         instance_id = len(instances) + 1
         instance_map[y0:y1, x0:x1][component > 0] = instance_id
         instances.append(
             SpermInstance(
                 instance_id=instance_id,
-                kind=kind,
+                kind="",  # set below, once heads resting on tails are known
                 head_count=len(heads),
+                tail_count=count_tails(skeleton, mass["halfwidth"], settings, scale),
                 bbox_xywh=[x, y, w, h],
                 area_px=area,
-                tail_length_px=round(length, 1),
-                straightness=round(straightness, 3),
-                local_straightness=round(local, 3),
-                path_fraction=round(path_fraction, 3),
+                tail_length_px=round(mass["length"], 1),
+                straightness=round(mass["straightness"], 3),
+                local_straightness=round(mass["local_straightness"], 3),
+                path_fraction=round(mass["path_fraction"], 3),
                 heads_xy=[[round(hx, 1), round(hy, 1)] for hx, hy in heads],
                 head_candidates=candidates,
             )
         )
 
+    add_lens_heads(instances, instance_map, masks, settings, scale)
+    for inst in instances:
+        if inst.kind != "tailless":
+            # Every accepted head has a tail reaching it, whatever the skeleton ends say.
+            inst.tail_count = max(inst.tail_count, inst.head_count)
+            inst.kind = classify_mass(inst.head_count, inst.tail_count)
+    add_barely_visible(instances, instance_map, masks, settings, scale)
+
     return {
         "instances": instances,
         "instance_map": instance_map,
         "masks": masks,
-        "sperm_count": sum(inst.head_count for inst in instances),
+        "counts": count_totals(instances),
         "magnification": settings.magnification,
     }
+
+
+def draw_count_key(out: NDArray[Any], result: dict[str, Any]) -> None:
+    """The counts and color key, on a darkened panel in the top-left corner."""
+    counts = result["counts"]
+    clusters = sum(1 for i in result["instances"] if i.kind == "overlap_cluster")
+    white = (255, 255, 255)
+    lines = [
+        (f"Total sperm: {counts['total_sperm']}", white, None),
+        (f"Intact: {counts['intact']}", INTACT_COLOR, INTACT_COLOR),
+        (f"Tail-less: {counts['tailless']}", TAILLESS_COLOR, TAILLESS_COLOR),
+        (f"Head-less: {counts['headless']}", HEADLESS_COLOR, HEADLESS_COLOR),
+        (f"Overlap clusters: {clusters}", CLUSTER_COLOR, CLUSTER_COLOR),
+        (f"Barely visible: {counts['barely_visible']}", BARELY_VISIBLE_COLOR, BARELY_VISIBLE_COLOR),
+        (f"Total heads: {counts['total_heads']}", white, None),
+        (f"Total tails: {counts['total_tails']}", white, None),
+    ]
+    line_height, width = 26, 320
+    height = line_height * len(lines) + 12
+    panel = out[:height, :width]
+    panel[:] = (panel * 0.3).astype(np.uint8)
+    for row, (text, color, swatch) in enumerate(lines):
+        baseline = 25 + row * line_height
+        if swatch is not None:
+            cv2.rectangle(out, (10, baseline - 14), (24, baseline), swatch, -1)
+        left = 32 if swatch is not None else 10
+        cv2.putText(out, text, (left, baseline), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
 
 def render_overlay(gray: NDArray[Any], result: dict[str, Any]) -> NDArray[Any]:
@@ -637,9 +961,11 @@ def render_overlay(gray: NDArray[Any], result: dict[str, Any]) -> NDArray[Any]:
     overlay = rgb.astype(np.float32)
     instance_map = result["instance_map"]
     colors = {
-        "single": SINGLE_COLOR,
+        "intact": INTACT_COLOR,
         "overlap_cluster": CLUSTER_COLOR,
-        "headless_tail": HEADLESS_COLOR,
+        "headless": HEADLESS_COLOR,
+        "tailless": TAILLESS_COLOR,
+        "barely_visible": BARELY_VISIBLE_COLOR,
     }
     for inst in result["instances"]:
         region = instance_map == inst.instance_id
@@ -649,30 +975,30 @@ def render_overlay(gray: NDArray[Any], result: dict[str, Any]) -> NDArray[Any]:
     head_number = 0
     for inst in result["instances"]:
         x, y, _, _ = inst.bbox_xywh
-        label = (
-            f"#{inst.instance_id}"
-            if inst.kind == "headless_tail"
-            else f"#{inst.instance_id} x{inst.head_count}"
-        )
-        cv2.putText(
-            out, label, (x, max(14, y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[inst.kind], 2
-        )
+        if inst.kind != "tailless":
+            label = (
+                f"#{inst.instance_id} {inst.head_count}H {inst.tail_count}T"
+                if inst.kind == "overlap_cluster"
+                else f"#{inst.instance_id}"
+            )
+            cv2.putText(
+                out, label, (x, max(14, y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[inst.kind], 2
+            )
+        marker = TAILLESS_COLOR if inst.kind == "tailless" else HEAD_COLOR
         for hx, hy in inst.heads_xy:
             head_number += 1
             center = (int(round(hx)), int(round(hy)))
-            cv2.circle(out, center, 14, HEAD_COLOR, 2)
+            cv2.circle(out, center, 14, marker, 2)
             cv2.putText(
                 out,
                 str(head_number),
                 (center[0] + 15, center[1] + 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                HEAD_COLOR,
+                marker,
                 2,
             )
-    banner = f"sperm count (heads): {result['sperm_count']}"
-    cv2.putText(out, banner, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4)
-    cv2.putText(out, banner, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    draw_count_key(out, result)
     return out
 
 
@@ -699,21 +1025,12 @@ def write_outputs(
         cv2.imwrite(str(out_dir / "instance_labels.png"), result["instance_map"])
         write_crops(gray, result, out_dir / "crops")
 
-    counts = {
-        kind: sum(1 for i in result["instances"] if i.kind == kind)
-        for kind in ("single", "overlap_cluster", "headless_tail")
-    }
     summary = {
         "image": str(image_path),
         "width": width,
         "height": height,
-        "sperm_count": result["sperm_count"],
-        "single_instances": counts["single"],
-        "overlap_clusters": counts["overlap_cluster"],
-        "heads_in_overlap_clusters": sum(
-            i.head_count for i in result["instances"] if i.kind == "overlap_cluster"
-        ),
-        "headless_tail_segments": counts["headless_tail"],
+        **result["counts"],
+        "overlap_clusters": sum(1 for i in result["instances"] if i.kind == "overlap_cluster"),
         "magnification": result["magnification"],
         "noise_sigma": round(result["masks"]["noise"], 3),
         "ridge_low": round(result["masks"]["ridge_low"], 3),
@@ -740,8 +1057,26 @@ def write_crops(gray: NDArray[Any], result: dict[str, Any], crops_dir: Path) -> 
         x1, y1 = min(width, x + w + margin), min(height, y + h + margin)
         crop = rgb[y0:y1, x0:x1].copy()
         region = result["instance_map"][y0:y1, x0:x1] == inst.instance_id
-        crop[region] = (0.5 * crop[region] + 0.5 * np.array(SINGLE_COLOR)).astype(np.uint8)
+        crop[region] = (0.5 * crop[region] + 0.5 * np.array(INTACT_COLOR)).astype(np.uint8)
         Image.fromarray(crop).save(crops_dir / f"{inst.instance_id:03d}_{inst.kind}.png")
+
+
+def batch_stats_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Total, mean, median, and range across images, one row per count column."""
+    stats = []
+    for column in COUNT_COLUMNS:
+        values = [row[column] for row in rows]
+        stats.append(
+            {
+                "count": column,
+                "total": sum(values),
+                "mean": round(statistics.mean(values), 3),
+                "median": statistics.median(values),
+                "min": min(values),
+                "max": max(values),
+            }
+        )
+    return stats
 
 
 def collect_images(input_path: Path) -> list[Path]:
@@ -931,10 +1266,11 @@ def main() -> None:
             )
         else:
             print(
-                f"{name}: {summary['sperm_count']} sperm "
-                f"({summary['single_instances']} single, "
-                f"{summary['overlap_clusters']} overlap clusters, "
-                f"{summary['headless_tail_segments']} headless tail segments)"
+                f"{name}: {summary['total_sperm']} sperm "
+                f"({summary['intact']} intact, {summary['tailless']} tail-less, "
+                f"{summary['headless']} head-less; "
+                f"{summary['total_heads']} heads, {summary['total_tails']} tails; "
+                f"{summary['barely_visible']} barely visible)"
             )
 
     if args.preview_only:
@@ -946,6 +1282,12 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+    stats_csv = output_root / "batch_stats.csv"
+    stats_rows = batch_stats_rows(rows)
+    with stats_csv.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(stats_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(stats_rows)
     if args.json_progress:
         emit(
             {
@@ -953,5 +1295,6 @@ def main() -> None:
                 "total": total,
                 "output_root": str(output_root.resolve()),
                 "summary_csv": str(summary_csv.resolve()),
+                "batch_stats_csv": str(stats_csv.resolve()),
             }
         )

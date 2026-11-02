@@ -3,12 +3,37 @@
 
 /** One row of summary.csv, as the CLI reports it with --json-progress. */
 export type ImageSummary = {
-  sperm_count: number;
-  single_instances: number;
+  total_sperm: number;
+  intact: number;
+  tailless: number;
+  headless: number;
+  total_heads: number;
+  total_tails: number;
+  barely_visible: number;
   overlap_clusters: number;
-  heads_in_overlap_clusters: number;
-  headless_tail_segments: number;
 };
+
+type CountKey = "total_sperm" | "intact" | "tailless" | "headless" | "total_heads" | "total_tails" | "barely_visible";
+
+export const COUNT_ROWS: { key: CountKey; label: string }[] = [
+  { key: "total_sperm", label: "Total sperm" },
+  { key: "intact", label: "Intact" },
+  { key: "tailless", label: "Tail-less" },
+  { key: "headless", label: "Head-less" },
+  { key: "total_heads", label: "Total heads" },
+  { key: "total_tails", label: "Total tails" },
+  { key: "barely_visible", label: "Barely visible" },
+];
+
+/** The overlay's colors. A test keeps them equal to the ones in sperm_count.py. */
+export const COLOR_KEY: { label: string; constant: string; rgb: [number, number, number]; ring?: boolean }[] = [
+  { label: "Intact", constant: "INTACT_COLOR", rgb: [0, 220, 90] },
+  { label: "Tail-less", constant: "TAILLESS_COLOR", rgb: [230, 70, 230], ring: true },
+  { label: "Head-less", constant: "HEADLESS_COLOR", rgb: [0, 170, 255] },
+  { label: "Barely visible", constant: "BARELY_VISIBLE_COLOR", rgb: [240, 220, 60] },
+  { label: "Overlap cluster", constant: "CLUSTER_COLOR", rgb: [255, 140, 0] },
+  { label: "Head on a tail", constant: "HEAD_COLOR", rgb: [255, 40, 40], ring: true },
+];
 
 export type BatchStats = {
   images: number;
@@ -27,6 +52,14 @@ export function batchStats(counts: number[]): BatchStats | null {
   const middle = Math.floor(n / 2);
   const median = n % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
   return { images: n, total, mean: total / n, median, min: sorted[0], max: sorted[n - 1] };
+}
+
+/** Batch stats for every count, in display order. */
+export function countTable(summaries: ImageSummary[]) {
+  return COUNT_ROWS.flatMap(({ key, label }) => {
+    const stats = batchStats(summaries.map((summary) => summary[key]));
+    return stats ? [{ key, label, stats }] : [];
+  });
 }
 
 /** Whole numbers stay whole; everything else gets one decimal. */

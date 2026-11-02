@@ -11,8 +11,9 @@ the current imaging setup.
 Like SCP, it is fully deterministic image processing. There is no model
 training and no learned image recognition.
 
-**Status: prerelease.** Counts are provisional. They have not yet been
-validated against expert counts (see
+**Status: prerelease.** Counts are provisional. The counting rule comes from
+the supervisor, and the first comparison with the supervisor's reference counts
+shows work still to do (see
 [Validation status](#validation-status-and-open-counting-rules)).
 
 ## Install
@@ -46,13 +47,14 @@ WSLg. Keep images under the Linux filesystem (`~/...`): it is much faster than
    Prev / Next, the arrow keys, or the thumbnails.
 2. **Count sperm.** Each image switches to its overlay as soon as it is
    counted. The count shows on its thumbnail.
-3. The side panel shows the current image's count (single sperm, sperm in
-   overlap clusters, and headless tails, which are not counted), and the batch
-   totals: total sperm, mean and median per image, and range.
+3. The side panel shows the current image's counts (total sperm, intact,
+   tail-less, head-less, total heads, total tails, and barely visible), and a
+   table with the total, mean, median, and range of each across the batch. A
+   color key under the image explains the overlay.
 
 Every run saves to a new folder, by default
 `~/EyeSpySC results/<folder name> <date time>/` ("Change…" picks another
-place). It contains `summary.csv` and, per image, `original.png`,
+place). It contains `summary.csv`, `batch_stats.csv` and, per image, `original.png`,
 `overlay.png`, and `candidate_pixels.png` (the CLI's `--minimal` output).
 Earlier results are never overwritten. The magnification is fixed at 20x.
 
@@ -85,7 +87,7 @@ Neither is expected in normal use.
 |---|---|---|
 | Input | High-contrast RGB Ward TIFFs, brown stain on a light background | 8-bit grayscale phase contrast (RGB inputs are converted to gray) |
 | Sperm-pixel cue | Brown/olive HSV stain gate plus local darkness | Hessian ridge (line) filter plus local darkness |
-| Overlap | The main open research problem (R1–R4 path search and assignment) | Assumed rare. If tails do connect, the whole mass is highlighted and its **heads** are counted |
+| Overlap | The main open research problem (R1–R4 path search and assignment) | Assumed rare. If tails do connect, the whole mass is highlighted and its heads and tails are counted |
 | Main output | Per-sperm crops for morphology review | A **sperm count** per image, plus masks, crops, and an overlay |
 
 The SCP overlap-resolution work (R-series experiments) is on hold. Nothing in
@@ -153,15 +155,37 @@ was replaced rather than retuned.
    Inside a multi-head mass, a candidate whose neck (first 30 px of tail) is
    much fainter than the others is treated as debris on a tail end. Real
    midpieces are dark. This rule is applied after the two passes are merged.
-6. **Classification and count.** Each component is classified:
+6. **Heads the tail test cannot see.** A dark blob with the slender lens shape
+   of a sperm head (length at least twice the width, 6.5–14 px wide, at most
+   70 px long, smooth outline) is also a head. On a mass it is a head resting on
+   a tail, and must be at least 8 px wide so a dark midpiece does not pass. Off
+   a mass it is a tail-less sperm, and must keep its shape at a lower darkness
+   threshold, where debris clumps and pieces of round cells grow larger and
+   rounder.
+7. **Tails.** Each mass is split at junctions, and the free ends of its long,
+   thin branches (at least 40 px, median half-width at most 3.5 px) are counted.
+   A tail has two ends and a crossing of two tails leaves four, so a mass holds
+   ceil(ends / 2) tails, and never fewer than its heads.
+8. **Barely visible tails.** A second pass lowers the bar for the strongest
+   pixel of a tail (`ridge_faint_high_k`) and keeps only long, thin, locally
+   straight masses that the main pass did not already see.
+9. **Categories and count.**
 
-   | Kind | Heads | Highlighted as | Counted |
-   |---|---|---|---|
-   | `single` | 1 | Green | 1 |
-   | `overlap_cluster` | 2 or more | Orange (the whole connected mass) | Number of heads |
-   | `headless_tail` | 0 | Blue | 0, reported separately |
+   | Category | What it is | Overlay |
+   |---|---|---|
+   | Intact | Head and tail | Green mass, red head marker |
+   | Tail-less | Head with no tail | Magenta ring |
+   | Head-less | Tail with no head | Blue mass |
+   | Barely visible | Faint tail, reported separately | Yellow mass |
 
-   **Sperm count = total accepted heads.**
+   A mass holding more than one sperm is orange (`overlap_cluster`), labeled with
+   its heads and tails, for example `#7 3H 5T`. Its heads pair with its tails:
+   the pairs are intact and the extra tails are head-less.
+
+   **Total sperm = intact + the larger of tail-less and head-less**, for each
+   image. A loose head and a loose tail are probably parts of one sperm, so
+   adding both would count it twice. This equals the larger of total heads and
+   total tails. Barely visible tails are not in the total.
 
 Every head candidate is written to `instances.json` with its measurements and
 an accept/reject `reason`, so threshold tuning can be done from data.
@@ -236,15 +260,21 @@ backend/.venv/bin/eyespysc --input inputsTest --output-root outputs/runFull \
 
 ## Outputs
 
-`<output-root>/summary.csv` holds one row per image: sperm count, single and
-overlap counts, headless tail segments, and noise and threshold values.
+`<output-root>/summary.csv` holds one row per image: `total_sperm`, `intact`,
+`tailless`, `headless`, `total_heads`, `total_tails`, `barely_visible`,
+`overlap_clusters`, and noise and threshold values.
+
+`<output-root>/batch_stats.csv` holds one row per count, with its total, mean,
+median, minimum, and maximum across the images. Each image's total sperm is
+worked out on its own and then summed, so the batch total can differ from
+applying the rule to the batch's tail-less and head-less totals.
 
 Each image also gets a folder, `<output-root>/<image-stem>/`, containing:
 
 | File | Contents |
 |---|---|
 | `original.png` | The input as an 8-bit grayscale PNG, unannotated |
-| `overlay.png` | Colored instances, numbered head markers, and the count banner |
+| `overlay.png` | Colored instances, numbered head markers, and the counts with a color key |
 | `sperm_mask.png` | Binary union of the accepted sperm masses |
 | `instance_labels.png` | 16-bit instance id map (0 = background) |
 | `candidate_pixels.png` | Raw ridge ∪ dark-blob mask before shape filtering (debug) |
@@ -280,10 +310,11 @@ Versions are changed only with `./scripts/update-release-version.sh vX.Y.Z`.
 The tests use synthetic phase-contrast-like images. They cover:
 
 - a single sperm and two separate sperm;
-- crossing tails (one overlap cluster, two heads counted);
+- crossing tails (one overlap cluster, two heads counted), and a tail crossing a
+  sperm (one intact, one head-less);
 - debris and round cells (not counted);
 - debris in the middle of a tail (not a second head);
-- headless tails;
+- head-less, tail-less, and barely visible sperm, and the total-sperm rule;
 - pure noise;
 - determinism;
 - junction and endpoint helpers, local straightness, and ordered path
@@ -296,14 +327,8 @@ The tests use synthetic phase-contrast-like images. They cover:
 
 ## Current results on the example image
 
-`EXAMPLE_testis_0007_TRANS.tif` gives **12 sperm**: 12 single, 0 overlap
-clusters, and 1 headless tail segment. These results were checked visually.
-
-- Every counted sperm corresponds to a visible sperm, with the marker on its
-  head.
-- Debris clumps touching tails were rejected, and so was a crossing headless
-  tail.
-- Three sperm that run off the image edge were not counted.
+`EXAMPLE_testis_0007_TRANS.tif` gives **14 sperm**: 13 intact, 1 tail-less, and
+1 head-less (14 heads, 14 tails), plus 2 barely visible tails.
 
 ## Known limitations
 
@@ -312,7 +337,7 @@ clusters, and 1 headless tail segment. These results were checked visually.
   through another sperm is also suppressed by the faint-neck rule.
 - **Debris on the far end of a tail** looks like a head-at-terminus. It is
   rejected only when the mass also contains a real head with a darker neck.
-- **Headless tails that cross a headed sperm** are included in that sperm's
+- **Head-less tails that cross a headed sperm** are included in that sperm's
   mask. They are not counted, but the mask is larger than one sperm.
 - **The thresholds were tuned on a single example image.** The local
   straightness margin is narrow: real tails scored 0.91–0.96 and the worst
@@ -324,9 +349,15 @@ clusters, and 1 headless tail segment. These results were checked visually.
   bigger: there is relief contrast, the head is an open, hollow hook, and the
   midpiece is a thick two-edged band. The experimental 40x preset misses most
   heads.
-- **Heads lying on another sperm's tail** are seen as "tail passes through"
-  and are not counted. This is the main remaining miss in the 20231215
-  folder (for example the central tangle in `caput_0016`).
+- **Tail-less detections are not all heads.** On 12 review images, hand
+  labeling suggested that about 1 in 7 is a debris clump or a pair of touching
+  round cells. On those images total sperm usually follows total heads, so these
+  errors reach the total directly.
+- **Some heads are counted twice.** A single sperm lying on a large cell or
+  debris can get two heads (`20231002 testis_0008`, `20231215 M3O4_0003`).
+- **Barely visible heads are not detected**, only barely visible tails.
+- **Heads lying on another sperm's tail** are recovered only when they are
+  lens-shaped and at least 8 px wide.
 - **Extremely crowded frames** (for example `20231002 cauda_0035`, with
   hundreds of tangled sperm) are out of scope, and their counts are not
   meaningful. See [Input requirements](#input-requirements).
@@ -335,39 +366,52 @@ clusters, and 1 headless tail segment. These results were checked visually.
 
 ## Validation status and open counting rules
 
-**Provisional (non-expert) counts** for 12 images, made by the project's
-developer, are in `validation/provisional_counts_2026-10-28.csv` (the only
-lab-data file committed to this repository), together with the algorithm's
-count from the same date. On these images the algorithm undercounted every
-time and never overcounted. It found 126 sperm against 202 counted by hand
-(about 62%).
+**Counting rule, from the supervisor (2026-11-02).**
 
-**No tuning has been done from these counts.** Expert reference counts come
-first.
-
-**Expert counts requested.** A blind bundle (original image files plus a count
-sheet with total count and notes per image, without any algorithm or
-provisional counts) was prepared
-for the supervisor in `outputs/Kyle_review_bundle/` (plus
-`outputs/Kyle_review_bundle.zip`; local only). When it comes back, compare all three for the 12 images: algorithm,
-provisional, and expert.
-
-**TODO: ask the supervisor which objects count as a sperm.** The answers
-decide what the algorithm should count:
-
-| Question | Algorithm today |
+| Question | Answer |
 |---|---|
-| Should **detached heads** (no tail) be counted? | Not counted. A head is only recognized where a tail ends |
-| Should **headless tails** in the frame be counted, ignored, or reported separately? | Reported separately as `headless_tail` and not counted |
-| How should **sperm cut off by the border** be handled? That covers heads on the edge with little tail, and tails entering from the edge with no head | Heads with less than about 100 px of tail are missed. Edge tails without a head are not counted |
-| Should **very faint ("transparent") sperm** be included? | Often below the detection threshold |
-| Is there a **standard counting convention** for this preparation? | — |
+| Count tails with no head? | Yes |
+| Count heads with no tail? | Yes |
+| Count faint or out-of-focus sperm? | Yes, every visible instance when counting by hand. For the software, ignore them if it cannot tell |
+| Which total? | Intact + the larger of tail-less and head-less |
+
+Still open:
+
+- Are barely visible sperm added to the total? They are reported separately for
+  now.
+- Is the rule applied to each image or to a whole sample? It is applied to each
+  image for now.
+- How should sperm cut off by the image border be handled?
+
+**Reference counts.** `outputs/Kyle_review_bundle/count_sheet_supervisor_updated.csv`
+(local only) has two totals for the 12 review images, which serve as lower and
+upper bounds for testing. `total_count_with_tailless` counts every head, tail,
+and intact sperm found, before the total-sperm rule. `total_count` is the lower
+figure. The sheet has totals only, so misses and false detections cannot be told
+apart. No thresholds have been tuned against these counts yet.
+
+| Compared with the upper bound (251) | Total | Mean error per image | Correlation | Within ±2 |
+|---|---:|---:|---:|---:|
+| Intact + tail-less + head-less (like for like) | 262 | 3.08 | 0.94 | 4/12 |
+| The same plus barely visible | 282 | 4.08 | 0.91 | 4/12 |
+| Heads only (the count before these categories) | 126 | 10.58 | 0.61 | 2/12 |
+
+Total sperm under the rule comes to 222, between the batch bounds of 194 and 251,
+and falls inside the bounds on 6 of the 12 images. It is too high on three
+images with many cells and much debris (`testis_0008`, `M3O4_0003`, `testis_0007`)
+and too low on three others (`caput_0016`, `testis_0003` from 20240819, and
+`caput_0023`).
+
+**Provisional (non-expert) counts** for the same 12 images, made by the project's
+developer, are in `validation/provisional_counts_2026-10-28.csv` (the only
+lab-data file committed to this repository). They total 182, against 126 for the
+head-only count the algorithm used on that date.
 
 **Thinning implementation (ZhengTest).** On the same 12 images, OpenCV-contrib's
 `cv2.ximgproc.thinning` gave identical counts to the numpy Zhang–Suen used
 here, but one head moved to a different object (`docs/Dev_Diary.md`). The
 numpy version stays. `scripts/zheng-test.sh` repeats the comparison and must
-be rerun after the algorithm is re-tuned against the expert counts.
+be rerun after the algorithm is re-tuned against the reference counts.
 
 ## Next steps
 

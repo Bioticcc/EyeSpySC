@@ -50,8 +50,8 @@ make desktop-dev        # run the GUI from source
 ```
 
 Regression baseline: the full test-image batch below must give a `summary.csv`
-identical to `outputs/runFull/summary.csv` (100 images) unless the change is
-meant to alter counts.
+identical to `outputs/runFull_2026-11-02/summary.csv` (100 images) unless the
+change is meant to alter counts.
 
 ```bash
 backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
@@ -89,12 +89,20 @@ input images.
   `EyeSpySC_Testing-Environment/` (section 11 and Appendix A). Lab data stays
   in this folder, git-ignored.
 
-## Status (2026-10-30)
+## Status (2026-11-02)
 
-- **Algorithm tuning is blocked:** we are waiting for the supervisor's expert
-  sperm counts. Do not tune thresholds from the provisional (non-expert)
-  counts. See README "Validation status and open counting rules".
-- **Rerun the ZhengTest after re-tuning.** Once the expert counts arrive and
+- **Counting rule (supervisor, 2026-11-02).** Four categories: intact,
+  tail-less, head-less, barely visible. Total sperm = intact + the larger of
+  tail-less and head-less, per image. Barely visible tails are reported
+  separately. See README "Validation status and open counting rules".
+- **Reference counts:** `outputs/Kyle_review_bundle/count_sheet_supervisor_updated.csv`
+  (git-ignored). `total_count_with_tailless` counts every head, tail, and intact
+  sperm found, before the rule, so compare it with intact + tail-less + head-less.
+  With `total_count` it gives lower and upper bounds for testing. Use this sheet
+  for tuning, not the provisional (non-expert) counts. Thresholds have not been
+  tuned against it yet, and these 12 images should not be the only check: tuning
+  needs a held-out set that includes cauda.
+- **Rerun the ZhengTest after re-tuning.** Once the reference counts arrive and
   the algorithm is updated, run `scripts/zheng-test.sh` again (numpy
   Zhang–Suen vs OpenCV-contrib thinning on the 12 review images). On
   2026-10-30 counts were identical and one head moved; we kept the numpy

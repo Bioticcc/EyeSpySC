@@ -361,18 +361,92 @@
   font-size: 0.8rem;
 }
 
-.batch-metrics {
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
+.count-rule {
+  margin: -0.3rem 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.kv.kv-gap {
+  margin-top: 0.7rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-table th,
+.batch-table td {
+  padding: 0.28rem 0 0.28rem 0.4rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.batch-table thead th {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.batch-table th[scope="row"] {
+  padding-left: 0;
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+}
+
+.batch-table tbody tr + tr {
+  border-top: 1px solid var(--line);
+}
+
+.batch-table tr.lead th,
+.batch-table tr.lead td {
+  color: var(--green-950);
+  font-weight: 700;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The overlay's colors; COLOR_KEY in stats.ts sets each swatch. */
+.color-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
   margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  list-style: none;
 }
 
-.batch-metrics .metric-card {
-  padding: 0.55rem 0.7rem;
+.color-key li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-.batch-metrics .metric-card strong {
-  font-size: 1.35rem;
+.swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.swatch.ring {
+  border: 2px solid;
+  border-radius: 50%;
 }
 
 .saved-note {
