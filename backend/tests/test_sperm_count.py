@@ -141,13 +141,79 @@ class SyntheticCountingTests(unittest.TestCase):
 
     def test_two_touching_round_cells_are_not_a_head(self):
         img, rng = blank(15)
-        cv2.circle(img, (400, 300), 9, 95, -1)
-        cv2.circle(img, (422, 300), 9, 95, -1)
-        cv2.circle(img, (411, 300), 40, 125, -1)
-        cv2.circle(img, (400, 300), 9, 95, -1)
-        cv2.circle(img, (422, 300), 9, 95, -1)
+        cv2.circle(img, (400, 300), 8, 95, -1)
+        cv2.circle(img, (422, 300), 8, 95, -1)
+        cv2.line(img, (400, 300), (422, 300), 125, 1)
         result = sc.analyze_image(finish(img, rng))
-        self.assertEqual(result["counts"]["tailless"], 0)
+        self.assertEqual(result["counts"]["total_heads"], 0)
+
+    def test_tail_ending_at_a_round_cell_has_no_head(self):
+        img, rng = blank(20)
+        cv2.circle(img, (200, 300), 22, 95, -1)
+        cv2.line(img, (222, 300), (600, 200), 118, 2)
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual((counts["total_heads"], counts["headless"]), (0, 1))
+
+    def draw_tail_with_midpiece(self, img, start, end):
+        """A plain tail from end towards start, darkening into a midpiece at start."""
+        start, end = np.array(start), np.array(end)
+        joint = start + (end - start) * 90 / np.linalg.norm(end - start)
+        cv2.line(img, tuple(int(v) for v in start), tuple(int(v) for v in joint), 100, 4)
+        cv2.line(img, tuple(int(v) for v in joint), tuple(int(v) for v in end), 125, 2)
+
+    def test_midpiece_running_into_debris_gets_a_head(self):
+        img, rng = blank(21)
+        cv2.circle(img, (200, 300), 22, 95, -1)
+        self.draw_tail_with_midpiece(img, (222, 300), (600, 200))
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual((counts["intact"], counts["headless"]), (1, 0))
+
+    def test_midpiece_with_a_clean_end_stays_headless(self):
+        img, rng = blank(22)
+        self.draw_tail_with_midpiece(img, (222, 300), (600, 200))
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual((counts["total_heads"], counts["headless"]), (0, 1))
+
+    def test_midpiece_beside_an_accepted_head_adds_nothing(self):
+        img, rng = blank(23)
+        draw_sperm(img, (200, 300), 0, tail_len=300)
+        counts = sc.analyze_image(finish(img, rng))["counts"]
+        self.assertEqual((counts["total_heads"], counts["intact"]), (1, 1))
+
+    def test_strands_follow_a_tail_straight_through_a_junction(self):
+        skeleton = np.zeros((300, 300), np.uint8)
+        cv2.line(skeleton, (10, 150), (290, 150), 1, 1)  # one tail straight across
+        cv2.line(skeleton, (150, 150), (150, 290), 1, 1)  # another stops at it
+        skeleton = sc.skeletonize(skeleton)
+        strands = sc.trace_strands(skeleton, np.ones(skeleton.shape), sc.Settings(), 1.0)
+        self.assertEqual(sorted(len(s) > 200 for s in strands), [False, True])
+
+    def test_head_width_rejects_tails_and_cells_but_keeps_hollow_heads(self):
+        settings = sc.Settings()
+        canvas = np.zeros((200, 500), np.uint8)
+        cv2.line(canvas, (10, 40), (150, 40), 1, 5)  # thick tail, half-width 3-4
+        cv2.ellipse(canvas, (250, 40), (20, 7), 0, 0, 360, 1, -1)  # head
+        cv2.circle(canvas, (250, 140), 22, 1, -1)  # round cell
+        cv2.line(canvas, (340, 40), (480, 40), 1, 5)  # hollow head, as thin as the tail
+        darkness = np.zeros(canvas.shape, np.float32)
+        darkness[40, 410] = -8.0
+        masks = {"halfwidth": cv2.distanceTransform(canvas, cv2.DIST_L2, 3), "darkness": darkness}
+        self.assertFalse(sc.head_width_ok([80.0, 40.0], masks, settings, 1.0))
+        self.assertTrue(sc.head_width_ok([250.0, 40.0], masks, settings, 1.0))
+        self.assertFalse(sc.head_width_ok([250.0, 140.0], masks, settings, 1.0))
+        self.assertTrue(sc.head_width_ok([410.0, 40.0], masks, settings, 1.0))
+
+    def test_waist_separates_one_lobe_from_two(self):
+        lens = np.zeros((40, 80), np.uint8)
+        cv2.ellipse(lens, (40, 20), (30, 8), 0, 0, 360, 1, -1)
+        dumbbell = np.zeros((40, 80), np.uint8)
+        cv2.circle(dumbbell, (25, 20), 10, 1, -1)
+        cv2.circle(dumbbell, (55, 20), 10, 1, -1)
+        cv2.line(dumbbell, (25, 20), (55, 20), 1, 5)
+        for mask, low, high in ((lens, 0.95, 1.01), (dumbbell, 0.0, 0.7)):
+            ys, xs = np.nonzero(mask)
+            waist = sc.narrowest_waist(xs, ys, 1.0)
+            self.assertTrue(low <= waist <= high, waist)
 
     def test_total_is_intact_plus_the_larger_of_tailless_and_headless(self):
         img, rng = blank(16)

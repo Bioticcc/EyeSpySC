@@ -331,6 +331,10 @@ export default function App() {
                     Accepted files: {ACCEPTED_TYPES_TEXT}. 8- or 16-bit grayscale phase
                     contrast; color images are converted to gray.
                   </p>
+                  <p className="accepted-types">
+                    Counts are less accurate on crowded images with overlapping sperm, and on
+                    samples known to contain abnormal sperm.
+                  </p>
                   <div className="dropzone-actions">
                     <button className="button primary" type="button" onClick={() => void pickFolder()}>
                       Choose folder…
@@ -555,6 +559,7 @@ export default function App() {
                   <ul>
                     <li>Counts are provisional until checked against expert counts.</li>
                     <li>Only 20x images are supported. Extremely crowded frames are out of scope.</li>
+                    <li>Counts are less accurate on crowded images with overlapping sperm, and on samples known to contain abnormal sperm.</li>
                   </ul>
                 </div>
               </div>

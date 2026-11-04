@@ -130,6 +130,45 @@ class Settings:
     lens_faint_darkness: float = 2.5
     lens_faint_max_growth: float = 1.8
     lens_faint_min_aspect: float = 1.9
+    # A head is one lobe. Along its length, a dip in width below this fraction of
+    # the narrower side's peak means several lobes: touching cells or clumped debris.
+    lens_min_waist: float = 0.85
+    # Half-width of the object at a head, at the lower darkness threshold with holes
+    # filled, so hollow heads measure whole. A plain tail end is thinner; a round
+    # cell or a debris sheet is wider.
+    head_min_halfwidth: float = 4.0
+    head_max_halfwidth: float = 10.0
+    head_width_reach: float = 14.0  # search radius around the head marker
+    # A hollow head seen edge-on is as thin as a thick tail, but has a bright center:
+    # between these half-widths a head needs a pixel this many noise units brighter
+    # than the background, within head_bright_reach of the marker.
+    head_thin_halfwidth: float = 3.0
+    head_thin_bright_core: float = 5.0
+    head_bright_reach: float = 10.0
+    # Following one tail through a junction: skeleton segments shorter than this, or
+    # thicker than max_tail_halfwidth + strand_extra_halfwidth, belong to the junction.
+    # Across it, a tail continues into the segment that turns it least, up to
+    # strand_max_turn degrees, with directions measured over strand_direction_reach.
+    strand_min_segment: float = 25.0
+    strand_extra_halfwidth: float = 1.0
+    strand_max_turn: float = 50.0
+    strand_direction_reach: float = 30.0
+    # A head hidden in debris still shows its midpiece: a dark stretch at the end of
+    # a tail, darker than this in noise units and than midpiece_min_ratio times the
+    # mass's plain tail (midpiece_tail_percentile of its thin skeleton).
+    midpiece_min_darkness: float = 4.5
+    midpiece_min_ratio: float = 2.0
+    midpiece_tail_percentile: float = 30.0
+    midpiece_min_length: float = 40.0
+    midpiece_max_halfwidth: float = 4.5
+    midpiece_max_gap: float = 12.0
+    midpiece_end_reach: float = 70.0  # from the stretch to the end of the tail
+    midpiece_smoothing: float = 7.0
+    midpiece_head_reach: float = 60.0  # an accepted head this close already explains it
+    # A headless tail keeps its midpiece and ends cleanly, so a head is added only when
+    # something wider than this lies within midpiece_blob_reach of the tail's end.
+    midpiece_blob_halfwidth: float = 4.4
+    midpiece_blob_reach: float = 20.0
 
 
 @dataclass
@@ -273,10 +312,19 @@ def build_masks(gray: NDArray[Any], settings: Settings) -> dict[str, Any]:
         blob, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     )
     blob = remove_small_components(blob, max(1, int(round(settings.min_head_area * scale * scale))))
+    faint = cv2.morphologyEx(
+        (smooth_dark >= settings.lens_faint_darkness * noise).astype(np.uint8),
+        cv2.MORPH_OPEN,
+        np.ones((3, 3), dtype=np.uint8),
+    )
     return {
         "ridge": ridge,
         "blob": blob,
         "sperm_pixels": cv2.bitwise_or(ridge, blob),
+        "faint": faint,
+        "halfwidth": cv2.distanceTransform(
+            (fill_holes(faint * 255) > 0).astype(np.uint8), cv2.DIST_L2, 3
+        ),
         "darkness": smooth_dark / noise,
         "response": response,
         "ridge_faint_high": median + settings.ridge_faint_high_k * spread,
@@ -601,6 +649,62 @@ def outline_shape(local: NDArray[Any]) -> tuple[NDArray[Any], float, float]:
     return contour, max(sides), max(min(sides), 1.0)
 
 
+def head_width_ok(xy: list[float], masks: dict[str, Any], settings: Settings, scale: float) -> bool:
+    """Is the object at this head as wide as a head: wider than a tail, narrower than a cell?"""
+    x, y = int(round(xy[0])), int(round(xy[1]))
+    reach = int(round(settings.head_width_reach * scale))
+    widest = float(
+        masks["halfwidth"][
+            max(0, y - reach) : y + reach + 1, max(0, x - reach) : x + reach + 1
+        ].max()
+    )
+    if widest > settings.head_max_halfwidth * scale or widest < (
+        settings.head_thin_halfwidth * scale
+    ):
+        return False
+    if widest >= settings.head_min_halfwidth * scale:
+        return True
+    reach = int(round(settings.head_bright_reach * scale))
+    brightest = float(
+        masks["darkness"][
+            max(0, y - reach) : y + reach + 1, max(0, x - reach) : x + reach + 1
+        ].min()
+    )
+    return brightest <= -settings.head_thin_bright_core
+
+
+def drop_heads_of_wrong_width(
+    instances: list[SpermInstance], masks: dict[str, Any], settings: Settings, scale: float
+) -> None:
+    """Remove tail-end heads that are really a plain tail end, a cell, or debris, in place."""
+    for inst in instances:
+        kept = [xy for xy in inst.heads_xy if head_width_ok(xy, masks, settings, scale)]
+        if len(kept) == len(inst.heads_xy):
+            continue
+        for cand in inst.head_candidates:
+            if cand.accepted and not head_width_ok(cand.xy, masks, settings, scale):
+                cand.accepted = False
+                cand.reason = "wrong_width_for_a_head"
+        inst.heads_xy = kept
+        inst.head_count = len(kept)
+
+
+def narrowest_waist(xs: NDArray[Any], ys: NDArray[Any], scale: float) -> float:
+    """Deepest dip in a region's width along its long axis, as a fraction of the
+    narrower peak beside it. 1.0 means one lobe."""
+    points = np.stack([xs, ys], axis=1).astype(np.float32)
+    _, _, axes = np.linalg.svd(points - points.mean(axis=0), full_matrices=False)
+    along = points @ axes[0]
+    bins = ((along - along.min()) // (2.0 * scale)).astype(int)
+    widths = np.convolve(np.bincount(bins).astype(float), np.ones(3) / 3, mode="same")
+    waist = 1.0
+    for i in range(1, len(widths) - 1):
+        peak = min(widths[:i].max(), widths[i + 1 :].max())
+        if widths[i] < peak:
+            waist = min(waist, float(widths[i] / peak))
+    return waist
+
+
 def find_lens_blobs(blob: NDArray[Any], settings: Settings, scale: float) -> list[dict[str, Any]]:
     """Dark blobs shaped like a sperm head: slender, smooth, and head-sized."""
     n_blobs, labels, stats, centroids = cv2.connectedComponentsWithStats(blob, connectivity=8)
@@ -619,6 +723,8 @@ def find_lens_blobs(blob: NDArray[Any], settings: Settings, scale: float) -> lis
             and cv2.contourArea(contour) / hull_area >= settings.lens_min_solidity
         ):
             ys, xs = np.nonzero(local)
+            if narrowest_waist(xs, ys, scale) < settings.lens_min_waist:
+                continue
             lenses.append(
                 {
                     "xy": [float(centroids[label][0]), float(centroids[label][1])],
@@ -660,13 +766,12 @@ def add_lens_heads(
     is a tail-less sperm.
     """
     merge_px = settings.head_merge_px * scale
-    faint = cv2.morphologyEx(
-        (masks["darkness"] >= settings.lens_faint_darkness).astype(np.uint8),
-        cv2.MORPH_OPEN,
-        np.ones((3, 3), dtype=np.uint8),
+    _, faint_labels, faint_stats, _ = cv2.connectedComponentsWithStats(
+        masks["faint"], connectivity=8
     )
-    _, faint_labels, faint_stats, _ = cv2.connectedComponentsWithStats(faint, connectivity=8)
     for lens in find_lens_blobs(masks["blob"], settings, scale):
+        if not head_width_ok(lens["xy"], masks, settings, scale):
+            continue
         ys, xs = lens["ys"], lens["xs"]
         owners = instance_map[ys, xs]
         owner = int(np.bincount(owners).argmax()) if np.any(owners) else 0
@@ -712,6 +817,245 @@ def add_lens_heads(
                 reason="lens_shape",
             )
         )
+
+
+def order_branch(branch: NDArray[Any]) -> NDArray[Any]:
+    """The pixels of a skeleton branch in order from one end, as (row, col)."""
+    pixels = {(int(r), int(c)) for r, c in zip(*np.nonzero(branch), strict=True)}
+
+    def neighbors(pixel: tuple[int, int]) -> list[tuple[int, int]]:
+        r, c = pixel
+        around = [(r + dr, c + dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dr or dc]
+        return [p for p in around if p in pixels]
+
+    ends = [pixel for pixel in pixels if len(neighbors(pixel)) == 1]
+    current: tuple[int, int] | None = min(ends) if ends else min(pixels)
+    path: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    while current is not None:
+        path.append(current)
+        seen.add(current)
+        r, c = current
+        ahead = [p for p in neighbors(current) if p not in seen]
+        # Prefer the side-by-side neighbor, so a corner pixel is not skipped.
+        current = min(ahead, key=lambda p: abs(p[0] - r) + abs(p[1] - c), default=None)
+    return np.array(path)
+
+
+def trace_strands(
+    skeleton: NDArray[Any], halfwidth: NDArray[Any], settings: Settings, scale: float
+) -> list[NDArray[Any]]:
+    """Follow each tail in a mass through its junctions, as ordered (row, col) paths.
+
+    The idea of pairing tails by direction at a junction comes from SCP's
+    junction_transitions module; this is a smaller version of it for counting.
+    """
+    binary = (skeleton > 0).astype(np.uint8)
+    crossings = crossing_number(binary)
+    junctions = cv2.dilate(
+        ((binary > 0) & (crossings >= 3)).astype(np.uint8), np.ones((3, 3), dtype=np.uint8)
+    )
+    n_branches, labels, stats, _ = cv2.connectedComponentsWithStats(
+        ((binary > 0) & (junctions == 0)).astype(np.uint8), connectivity=8
+    )
+    max_halfwidth = (settings.max_tail_halfwidth + settings.strand_extra_halfwidth) * scale
+    segments: dict[int, NDArray[Any]] = {}
+    for branch in range(1, n_branches):
+        pixels = labels == branch
+        if stats[branch, cv2.CC_STAT_AREA] >= settings.strand_min_segment * scale and (
+            np.median(halfwidth[pixels]) <= max_halfwidth
+        ):
+            segments[branch] = order_branch(pixels)
+    in_segment = np.isin(labels, list(segments))
+    _, hubs = cv2.connectedComponents(((binary > 0) & ~in_segment).astype(np.uint8), connectivity=8)
+
+    # A port is one end of a segment that enters a junction.
+    reach = int(settings.strand_direction_reach * scale)
+    ports: dict[int, list[tuple[int, int, NDArray[Any], NDArray[Any]]]] = {}
+    for branch, path in segments.items():
+        inner_points = (path[min(reach, len(path) - 1)], path[max(-reach - 1, -len(path))])
+        for side, (tip, inner) in enumerate(zip((path[0], path[-1]), inner_points, strict=True)):
+            r, c = int(tip[0]), int(tip[1])
+            if crossings[r, c] <= 1:
+                continue
+            near = hubs[max(r - 2, 0) : r + 3, max(c - 2, 0) : c + 3]
+            near = near[near > 0]
+            if near.size:
+                direction = (tip - inner).astype(np.float64)
+                direction /= max(float(np.linalg.norm(direction)), 1e-6)
+                hub = int(np.bincount(near).argmax())
+                ports.setdefault(hub, []).append((branch, side, tip.astype(np.float64), direction))
+
+    def turn_degrees(a: NDArray[Any], b: NDArray[Any]) -> float:
+        return float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))))
+
+    linked: dict[tuple[int, int], tuple[int, int]] = {}
+    for hub_ports in ports.values():
+        pairs = []
+        for i, (branch_a, _, tip_a, dir_a) in enumerate(hub_ports):
+            for j, (branch_b, _, tip_b, dir_b) in enumerate(hub_ports[i + 1 :], start=i + 1):
+                if branch_a == branch_b:
+                    continue
+                turn = turn_degrees(dir_a, -dir_b)
+                gap = tip_b - tip_a
+                gap_length = float(np.linalg.norm(gap))
+                # Across a wide hub both ends must also point at each other.
+                if gap_length > 12.0 * scale:
+                    gap /= gap_length
+                    turn = max(turn, turn_degrees(dir_a, gap), turn_degrees(-dir_b, gap))
+                pairs.append((turn, i, j))
+        used: set[int] = set()
+        for turn, i, j in sorted(pairs):
+            if turn <= settings.strand_max_turn and i not in used and j not in used:
+                used |= {i, j}
+                port_a, port_b = hub_ports[i][:2], hub_ports[j][:2]
+                linked[port_a] = port_b
+                linked[port_b] = port_a
+
+    seen: set[int] = set()
+
+    def walk(branch: int, entry_side: int) -> NDArray[Any]:
+        parts = []
+        while branch not in seen:
+            seen.add(branch)
+            path = segments[branch]
+            parts.append(path if entry_side == 0 else path[::-1])
+            following = linked.get((branch, 1 - entry_side))
+            if following is None:
+                break
+            branch, entry_side = following
+        return np.vstack(parts)
+
+    strands = []
+    # Open chains first, from an unlinked end; whatever is left is a closed loop.
+    starts = [(b, s) for b in segments for s in (0, 1) if (b, s) not in linked]
+    for branch, side in [*starts, *((b, 0) for b in segments)]:
+        if branch not in seen:
+            strands.append(walk(branch, side))
+    return strands
+
+
+def find_midpieces(
+    strands: list[NDArray[Any]],
+    skeleton: NDArray[Any],
+    halfwidth: NDArray[Any],
+    darkness: NDArray[Any],
+    settings: Settings,
+    scale: float,
+) -> list[dict[str, Any]]:
+    """At most one midpiece per tail: a long dark stretch reaching one of its ends."""
+    thin = (skeleton > 0) & (halfwidth <= settings.max_tail_halfwidth * scale)
+    if not thin.any():
+        return []
+    threshold = max(
+        settings.midpiece_min_darkness,
+        settings.midpiece_min_ratio
+        * float(np.percentile(darkness[thin], settings.midpiece_tail_percentile)),
+    )
+    min_length = settings.midpiece_min_length * scale
+    window = max(1, int(round(settings.midpiece_smoothing * scale)))
+    midpieces = []
+    for path in strands:
+        if len(path) < min_length:
+            continue
+        along = np.convolve(darkness[path[:, 0], path[:, 1]], np.ones(window) / window, mode="same")
+        hot = np.nonzero(
+            (along >= threshold)
+            & (halfwidth[path[:, 0], path[:, 1]] <= settings.midpiece_max_halfwidth * scale)
+        )[0]
+        if hot.size == 0:
+            continue
+        stretches = np.split(
+            hot, np.nonzero(np.diff(hot) > settings.midpiece_max_gap * scale)[0] + 1
+        )
+        found = []
+        for stretch in (stretches[0], stretches[-1]):
+            first, last = int(stretch[0]), int(stretch[-1])
+            length = path_length(path[first : last + 1])
+            to_start, to_end = path_length(path[: first + 1]), path_length(path[last:])
+            if (
+                length >= min_length
+                and min(to_start, to_end) <= settings.midpiece_end_reach * scale
+            ):
+                tip = path[0] if to_start <= to_end else path[-1]
+                found.append({"length": length, "tip": tip, "pixels": path[first : last + 1]})
+        if found:
+            midpieces.append(max(found, key=lambda midpiece: midpiece["length"]))
+    return midpieces
+
+
+def add_heads_at_midpieces(
+    instances: list[SpermInstance],
+    instance_map: NDArray[Any],
+    masks: dict[str, Any],
+    settings: Settings,
+    scale: float,
+) -> None:
+    """Add a head where a midpiece leads into debris and no accepted head explains it, in place.
+
+    Debris hides or breaks up the head itself, but the midpiece beside it stays
+    clear. A midpiece that ends cleanly belongs to a tail that lost its head.
+    """
+    height, width = instance_map.shape
+    pad = 4
+    for inst in instances:
+        if inst.kind == "tailless":
+            continue
+        x, y, w, h = inst.bbox_xywh
+        x0, y0 = max(x - pad, 0), max(y - pad, 0)
+        x1, y1 = min(x + w + pad, width), min(y + h + pad, height)
+        component = (instance_map[y0:y1, x0:x1] == inst.instance_id).astype(np.uint8)
+        skeleton = skeletonize(component)
+        if not np.any(skeleton):
+            continue
+        halfwidth = cv2.distanceTransform(component, cv2.DIST_L2, 3)
+        midpieces = find_midpieces(
+            trace_strands(skeleton, halfwidth, settings, scale),
+            skeleton,
+            halfwidth,
+            masks["darkness"][y0:y1, x0:x1],
+            settings,
+            scale,
+        )
+        unclaimed = [(hx - x0, hy - y0) for hx, hy in inst.heads_xy]
+        reach = settings.midpiece_head_reach * scale
+        blob_reach = int(settings.midpiece_blob_reach * scale)
+        for midpiece in sorted(midpieces, key=lambda m: -m["length"]):
+            tip_r, tip_c = int(midpiece["tip"][0]), int(midpiece["tip"][1])
+            rows, cols = midpiece["pixels"][:, 0], midpiece["pixels"][:, 1]
+            distances = [
+                min(
+                    float(np.min(np.hypot(cols - hx, rows - hy))),
+                    float(np.hypot(tip_c - hx, tip_r - hy)),
+                )
+                for hx, hy in unclaimed
+            ]
+            if distances and min(distances) <= reach:
+                unclaimed.pop(int(np.argmin(distances)))
+                continue
+            near_tip = halfwidth[
+                max(tip_r - blob_reach, 0) : tip_r + blob_reach + 1,
+                max(tip_c - blob_reach, 0) : tip_c + blob_reach + 1,
+            ]
+            if near_tip.max() <= settings.midpiece_blob_halfwidth * scale:
+                continue
+            xy = [float(tip_c + x0), float(tip_r + y0)]
+            inst.heads_xy.append(xy)
+            inst.head_count += 1
+            inst.head_candidates.append(
+                HeadCandidate(
+                    xy=xy,
+                    core_area_px=0,
+                    tail_branches=1,
+                    terminating_branches=1,
+                    side_branches=0,
+                    neck_darkness=float(masks["darkness"][tip_r + y0, tip_c + x0]),
+                    core_radius_px=0.0,
+                    dark_blob_id=-1,
+                    accepted=True,
+                    reason="midpiece_into_debris",
+                )
+            )
 
 
 def measure_tail_mass(
@@ -912,7 +1256,9 @@ def analyze_image(gray: NDArray[Any], settings: Settings | None = None) -> dict[
             )
         )
 
+    drop_heads_of_wrong_width(instances, masks, settings, scale)
     add_lens_heads(instances, instance_map, masks, settings, scale)
+    add_heads_at_midpieces(instances, instance_map, masks, settings, scale)
     for inst in instances:
         if inst.kind != "tailless":
             # Every accepted head has a tail reaching it, whatever the skeleton ends say.

@@ -161,7 +161,22 @@ was replaced rather than retuned.
    a tail, and must be at least 8 px wide so a dark midpiece does not pass. Off
    a mass it is a tail-less sperm, and must keep its shape at a lower darkness
    threshold, where debris clumps and pieces of round cells grow larger and
-   rounder.
+   rounder. A blob with a pinched waist (touching cells, clumped debris) is not a
+   head.
+
+   Every head, from this step or the last, must also be as wide as a head. Its
+   half-width at the lower threshold, with holes filled, must be 4–10 px: a plain
+   tail end is thinner, and a round cell or a debris sheet is wider. A hollow head
+   seen edge-on can be as thin as 3 px, so between 3 and 4 px a head passes only
+   with a bright center.
+
+   Debris can hide a head from both tests, but the midpiece beside it stays clear.
+   So each tail is followed through its junctions, pairing the segments that turn
+   it least (at most 50 degrees). A dark stretch at least 40 px long, reaching
+   within 70 px of the tail's end, is a midpiece. If no head lies within 60 px of
+   it and the tail's end runs into something wide (half-width above 4.4 px), a head
+   is added at that end. A midpiece that ends cleanly adds nothing, because a tail
+   that has lost its head keeps its midpiece.
 7. **Tails.** Each mass is split at junctions, and the free ends of its long,
    thin branches (at least 40 px, median half-width at most 3.5 px) are counted.
    A tail has two ends and a crossing of two tails leaves four, so a mass holds
@@ -327,8 +342,8 @@ The tests use synthetic phase-contrast-like images. They cover:
 
 ## Current results on the example image
 
-`EXAMPLE_testis_0007_TRANS.tif` gives **14 sperm**: 13 intact, 1 tail-less, and
-1 head-less (14 heads, 14 tails), plus 2 barely visible tails.
+`EXAMPLE_testis_0007_TRANS.tif` gives **13 sperm**: 12 intact, 1 tail-less, and
+1 head-less (13 heads, 13 tails), plus 2 barely visible tails.
 
 ## Known limitations
 
@@ -349,18 +364,33 @@ The tests use synthetic phase-contrast-like images. They cover:
   bigger: there is relief contrast, the head is an open, hollow hook, and the
   midpiece is a thick two-edged band. The experimental 40x preset misses most
   heads.
-- **Tail-less detections are not all heads.** On 12 review images, hand
-  labeling suggested that about 1 in 7 is a debris clump or a pair of touching
-  round cells. On those images total sperm usually follows total heads, so these
-  errors reach the total directly.
+- **Some counted heads are still false.** Before heads were added at midpieces,
+  hand labeling the 12 review images found 13 of the 202 counted heads to be false,
+  mostly debris or cells of head-like width. Those labels were also used to choose
+  the thresholds, and a later review disagreed with four of them, so treat this as
+  approximate. Total sperm usually follows total heads, so these errors reach the
+  total directly.
+- **Heads added at midpieces are inferred and not validated on cauda.** They raise
+  the 20x batch total by 15%, and cauda by 21% (1241 to 1498), but no reference
+  counts include cauda. By eye, about 4 in 5 of a sample on unseen images had a real
+  head beside them. Some land where a tail only runs into debris.
+- **The head checks remove some real heads.** On 24 images not used for tuning,
+  about 5 of the 25 removed heads looked real, mostly hollow heads where tails
+  cross.
 - **Some heads are counted twice.** A single sperm lying on a large cell or
-  debris can get two heads (`20231002 testis_0008`, `20231215 M3O4_0003`).
+  debris can get two heads (`20231002 testis_0008`, `20231215 M3O4_0003`). Asking
+  whether a head sits mid-tail does not fix this: it removes more real heads
+  (a tail lying across them looks the same) than false ones.
 - **Barely visible heads are not detected**, only barely visible tails.
 - **Heads lying on another sperm's tail** are recovered only when they are
   lens-shaped and at least 8 px wide.
 - **Extremely crowded frames** (for example `20231002 cauda_0035`, with
   hundreds of tangled sperm) are out of scope, and their counts are not
   meaningful. See [Input requirements](#input-requirements).
+- **Abnormal sperm lower accuracy.** The head checks assume normal head shapes,
+  so unusually thin heads can be missed. Expect lower accuracy on samples known
+  to contain abnormal sperm, such as knockout lines, and on images where sperm
+  overlap. The app says this on its start screen and on About.
 - **Some headless tails may have a curled head** that wasn't recognized (for
   example #5 in `20231215 cauda_0020`). This can make counts slightly low.
 
@@ -388,30 +418,39 @@ Still open:
 upper bounds for testing. `total_count_with_tailless` counts every head, tail,
 and intact sperm found, before the total-sperm rule. `total_count` is the lower
 figure. The sheet has totals only, so misses and false detections cannot be told
-apart. No thresholds have been tuned against these counts yet.
+apart. No thresholds have been fitted to these counts; the head checks came from
+hand labels of individual heads, with the sheet used only to measure the result.
 
 | Compared with the upper bound (251) | Total | Mean error per image | Correlation | Within ±2 |
 |---|---:|---:|---:|---:|
-| Intact + tail-less + head-less (like for like) | 262 | 3.08 | 0.94 | 4/12 |
-| The same plus barely visible | 282 | 4.08 | 0.91 | 4/12 |
+| Intact + tail-less + head-less (like for like) | 261 | 3.17 | 0.93 | 3/12 |
+| The same plus barely visible | 281 | 4.00 | 0.90 | 4/12 |
 | Heads only (the count before these categories) | 126 | 10.58 | 0.61 | 2/12 |
 
-Total sperm under the rule comes to 222, between the batch bounds of 194 and 251,
-and falls inside the bounds on 6 of the 12 images. It is too high on three
-images with many cells and much debris (`testis_0008`, `M3O4_0003`, `testis_0007`)
-and too low on three others (`caput_0016`, `testis_0003` from 20240819, and
-`caput_0023`).
+Total sperm under the rule comes to 228, between the batch bounds of 194 and 251,
+and falls inside the bounds on 4 of the 12 images. It is too high on five
+(`caput_0014`, `caput_0026`, `testis_0008`, `M3O4_0003`, `testis_0007`), by 1 to 4,
+and too low on three (`caput_0016`, `testis_0003` from 20240819, `caput_0023`).
+
+**Object-by-object review (developer, non-expert, 2026-11-04).** Four review images
+(`testis_0003` and `testis_0008` from 20231002, `M3O4_0003`, `testis_0007`) were
+checked object by object. Against that review, heads missed fell from 11 to 4 of 46
+and extra heads went from 3 to 4 when heads were added at midpieces. These images
+chose the midpiece rule, so this is optimistic. The review's totals are 12, 18–20,
+9–10, and 14, against 12, 20, 11, and 15 from the software. `M3O4` images are
+treated as knockout samples and are not used to choose thresholds.
 
 **Provisional (non-expert) counts** for the same 12 images, made by the project's
 developer, are in `validation/provisional_counts_2026-10-28.csv` (the only
 lab-data file committed to this repository). They total 182, against 126 for the
 head-only count the algorithm used on that date.
 
-**Thinning implementation (ZhengTest).** On the same 12 images, OpenCV-contrib's
-`cv2.ximgproc.thinning` gave identical counts to the numpy Zhang–Suen used
-here, but one head moved to a different object (`docs/Dev_Diary.md`). The
-numpy version stays. `scripts/zheng-test.sh` repeats the comparison and must
-be rerun after the algorithm is re-tuned against the reference counts.
+**Thinning implementation (ZhengTest).** On the same 12 images (2026-11-04),
+OpenCV-contrib's `cv2.ximgproc.thinning` gave the same counts as the numpy
+Zhang–Suen used here on 11 images and one more on `M3O4_0003` (12 against 11),
+and heads moved on two images (`docs/Dev_Diary.md`). The numpy version stays.
+`scripts/zheng-test.sh` repeats the comparison and must be rerun after the
+algorithm is re-tuned against the reference counts.
 
 ## Next steps
 

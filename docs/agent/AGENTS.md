@@ -50,7 +50,7 @@ make desktop-dev        # run the GUI from source
 ```
 
 Regression baseline: the full test-image batch below must give a `summary.csv`
-identical to `outputs/runFull_2026-11-02/summary.csv` (100 images) unless the
+identical to `outputs/runFull_2026-11-04/summary.csv` (100 images) unless the
 change is meant to alter counts.
 
 ```bash

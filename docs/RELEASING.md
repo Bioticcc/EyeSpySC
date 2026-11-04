@@ -11,7 +11,7 @@ git remote -v && gh auth status && ssh -T git@github.com
 
 # 1. Test
 ./scripts/check.sh
-# Regression: must equal outputs/runFull_2026-11-02/summary.csv unless counts are meant to change
+# Regression: must equal outputs/runFull_2026-11-04/summary.csv unless counts are meant to change
 backend/.venv/bin/eyespysc --input inputsTest --output-root <scratch dir> \
   --minimal --magnification-from-filename
 

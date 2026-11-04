@@ -128,3 +128,69 @@ lose heads. That is why faint tails get their own pass.
 
 All thresholds here were set by inspecting images, not against reference counts,
 so they may change. New regression baseline: `outputs/runFull_2026-11-02/`.
+
+## 2026-11-02: False heads in debris-heavy images
+
+Images with many cells and much debris counted too many sperm. Labeling all 222
+counted heads by hand on the 12 review images found 32 false ones (and 16 unsure),
+and they were not only loose lens shapes. The original tail-end test also produced
+them: plain tail ends with no head, and markers on round cells or debris.
+
+Three checks, all thresholds from those labels:
+
+- **Width.** Half-width at the head, at the lower darkness threshold with holes
+  filled, must be 4–10 px. A plain tail is thinner; a cell is wider.
+- **Hollow heads.** The first version removed real hollow heads seen edge-on,
+  mostly in cauda, which the review images do not include. Only a check on other
+  images showed this. They are as thin as thick tails (3.3–3.8 px) and have no
+  enclosed hole, but they do have a bright center (about -7 to -11 noise units,
+  against -3 to -5 for tails). Between 3 and 4 px a head now needs that bright core.
+- **Waist.** A loose lens with a pinched waist is touching cells or debris.
+
+Rejected: a test for heads sitting mid-tail. At 135 degrees or more between the two
+arms leaving a head, it removed 5 real heads to catch 3 false ones, because a real
+head with a tail across it looks the same.
+
+Result on the review images: 19 of the 32 false heads removed, 1 of 174 real heads
+lost. Those labels chose the thresholds, so this is optimistic. On 24 further images,
+25 of 705 heads were removed, and about 5 of those looked real.
+
+New regression baseline: `outputs/runFull_2026-11-02b/`.
+
+## 2026-11-04: Heads near debris
+
+An object-by-object review of four images showed sperm lost where a head sits in or
+beside debris: the head fails the tail-end test, the mass reads as one head-less
+tail, and whole sperm disappear from the total. Direction-paired tail counting alone
+did not help. It took the total only part of the way, because total sperm is the
+larger of heads and tails, and it inflated crowded cauda (74 to 194, or 110 in a
+stricter form).
+
+What does separate these cases is the midpiece, a dark stretch at the head end of
+the tail that stays visible when the head does not. Tails are now followed through
+junctions by direction (the idea is from SCP's `junction_transitions`; SCP's full
+resolver was built on stained color images and has not established real-image
+accuracy), and a midpiece with no head near it adds one.
+
+Two things went wrong first, both caught by checking on other images:
+
+- **A midpiece does not prove a head.** Tails that lost their heads keep theirs, and
+  caput has many. Heads jumped past the upper bound there until a head was required
+  to lie at a tail end that runs into something wide. Clean blunt ends stay head-less.
+- **Removing heads did more harm than good.** Dropping unexplained heads sitting
+  mid-tail fixed `M3O4_0003`, but on unseen cauda most of the sampled removals were
+  real heads with a faint tail lying across them. This matches the mid-tail test
+  rejected on 2026-11-02. The removal step was dropped.
+
+Result: on the four reviewed images, heads missed fell from 11 to 4 of 46 and extra
+heads went from 3 to 4. Against the count sheet it is close to neutral: mean accuracy
+of the rule total against the bounds went from 89.1% to 88.6%, with counts now more
+often above the upper bound than below the lower one. Over the 94 20x images the
+total went from 2425 to 2788, and cauda from 1241 to 1498. No reference counts cover
+cauda, so that rise is unconfirmed; by eye, about 4 in 5 of a sample of added heads
+on unseen images were beside a real head.
+
+ZhengTest rerun: counts match on 11 of 12 images, `M3O4_0003` gives 12 with contrib
+against 11, and heads moved on two images. The numpy thinning stays.
+
+New regression baseline: `outputs/runFull_2026-11-04/`.
